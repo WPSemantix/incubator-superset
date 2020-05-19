@@ -38,10 +38,12 @@ from flask_appbuilder.widgets import ListWidget
 from sqlalchemy import or_
 from sqlalchemy.engine.base import Connection
 from sqlalchemy.orm.mapper import Mapper
+from sqlalchemy.orm.query import Query
 
 from superset import sql_parse
 from superset.connectors.connector_registry import ConnectorRegistry
 from superset.constants import RouteMethod
+from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.exceptions import SupersetSecurityException
 from superset.utils.core import DatasourceName
 
@@ -49,7 +51,10 @@ if TYPE_CHECKING:
     from superset.common.query_context import QueryContext
     from superset.connectors.base.models import BaseDatasource
     from superset.models.core import Database
+    from superset.sql_parse import Table
     from superset.viz import BaseViz
+
+logger = logging.getLogger(__name__)
 
 
 class SupersetSecurityListWidget(ListWidget):
@@ -68,7 +73,7 @@ class SupersetRoleListWidget(ListWidget):
 
     template = "superset/fab_overrides/list_role.html"
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: Any) -> None:
         kwargs["appbuilder"] = current_app.appbuilder
         super().__init__(**kwargs)
 
@@ -79,7 +84,12 @@ PermissionViewModelView.list_widget = SupersetSecurityListWidget
 PermissionModelView.list_widget = SupersetSecurityListWidget
 
 # Limiting routes on FAB model views
-UserModelView.include_route_methods = RouteMethod.CRUD_SET | {"userinfo"}
+UserModelView.include_route_methods = RouteMethod.CRUD_SET | {
+    RouteMethod.ACTION,
+    RouteMethod.API_READ,
+    RouteMethod.ACTION_POST,
+    "userinfo",
+}
 RoleModelView.include_route_methods = RouteMethod.CRUD_SET
 PermissionViewModelView.include_route_methods = {RouteMethod.LIST}
 PermissionModelView.include_route_methods = {RouteMethod.LIST}
@@ -105,6 +115,7 @@ class SupersetSecurityManager(SecurityManager):
         "DruidColumnInlineView",
         "DruidDatasourceModelView",
         "DruidMetricInlineView",
+        "Datasource",
     } | READ_ONLY_MODEL_VIEWS
 
     ADMIN_ONLY_VIEW_MENUS = {
@@ -117,6 +128,7 @@ class SupersetSecurityManager(SecurityManager):
         "RoleModelView",
         "LogModelView",
         "Security",
+        "RowLevelSecurityFiltersModelView",
     } | USER_MODEL_VIEWS
 
     ALPHA_ONLY_VIEW_MENUS = {"Upload a CSV"}
@@ -128,9 +140,10 @@ class SupersetSecurityManager(SecurityManager):
         "can_override_role_permissions",
         "can_approve",
         "can_update_role",
+        "all_query_access",
     }
 
-    READ_ONLY_PERMISSION = {"can_show", "can_list"}
+    READ_ONLY_PERMISSION = {"can_show", "can_list", "can_get", "can_external_metadata"}
 
     ALPHA_ONLY_PERMISSIONS = {
         "muldelete",
@@ -143,7 +156,6 @@ class SupersetSecurityManager(SecurityManager):
         "schema_access",
         "datasource_access",
         "metric_access",
-        "can_only_access_owned_queries",
     }
 
     ACCESSIBLE_PERMS = {"can_userinfo"}
@@ -188,15 +200,13 @@ class SupersetSecurityManager(SecurityManager):
             return self.is_item_public(permission_name, view_name)
         return self._has_view_access(user, permission_name, view_name)
 
-    def can_only_access_owned_queries(self) -> bool:
+    def can_access_all_queries(self) -> bool:
         """
-        Return True if the user can only access owned queries, False otherwise.
+        Return True if the user can access all queries, False otherwise.
 
-        :returns: Whether the use can only access owned queries
+        :returns: Whether the user can access all queries
         """
-        return self.can_access(
-            "can_only_access_owned_queries", "can_only_access_owned_queries"
-        )
+        return self.can_access("all_query_access", "all_query_access")
 
     def all_datasource_access(self) -> bool:
         """
@@ -282,26 +292,59 @@ class SupersetSecurityManager(SecurityManager):
 
         return conf.get("PERMISSION_INSTRUCTIONS_LINK")
 
-    def get_table_access_error_msg(self, tables: List[str]) -> str:
+    def get_datasource_access_error_object(
+        self, datasource: "BaseDatasource"
+    ) -> SupersetError:
+        """
+        Return the error object for the denied Superset datasource.
+
+        :param datasource: The denied Superset datasource
+        :returns: The error object
+        """
+        return SupersetError(
+            error_type=SupersetErrorType.DATASOURCE_SECURITY_ACCESS_ERROR,
+            message=self.get_datasource_access_error_msg(datasource),
+            level=ErrorLevel.ERROR,
+            extra={
+                "link": self.get_datasource_access_link(datasource),
+                "datasource": datasource.name,
+            },
+        )
+
+    def get_table_access_error_msg(self, tables: Set["Table"]) -> str:
         """
         Return the error message for the denied SQL tables.
 
-        Note the table names conform to the [[cluster.]schema.]table construct.
-
-        :param tables: The list of denied SQL table names
+        :param tables: The set of denied SQL tables
         :returns: The error message
         """
-        quoted_tables = [f"`{t}`" for t in tables]
+
+        quoted_tables = [f"`{table}`" for table in tables]
         return f"""You need access to the following tables: {", ".join(quoted_tables)},
             `all_database_access` or `all_datasource_access` permission"""
 
-    def get_table_access_link(self, tables: List[str]) -> Optional[str]:
+    def get_table_access_error_object(self, tables: Set["Table"]) -> SupersetError:
+        """
+        Return the error object for the denied SQL tables.
+
+        :param tables: The set of denied SQL tables
+        :returns: The error object
+        """
+        return SupersetError(
+            error_type=SupersetErrorType.TABLE_SECURITY_ACCESS_ERROR,
+            message=self.get_table_access_error_msg(tables),
+            level=ErrorLevel.ERROR,
+            extra={
+                "link": self.get_table_access_link(tables),
+                "tables": [str(table) for table in tables],
+            },
+        )
+
+    def get_table_access_link(self, tables: Set["Table"]) -> Optional[str]:
         """
         Return the access link for the denied SQL tables.
 
-        Note the table names conform to the [[cluster.]schema.]table construct.
-
-        :param tables: The list of denied SQL table names
+        :param tables: The set of denied SQL tables
         :returns: The access URL
         """
 
@@ -309,95 +352,54 @@ class SupersetSecurityManager(SecurityManager):
 
         return conf.get("PERMISSION_INSTRUCTIONS_LINK")
 
-    def _datasource_access_by_name(
-        self, database: "Database", table_name: str, schema: str = None
+    def can_access_datasource(
+        self, database: "Database", table: "Table", schema: Optional[str] = None
     ) -> bool:
         """
         Return True if the user can access the SQL table, False otherwise.
 
         :param database: The SQL database
-        :param table_name: The SQL table name
-        :param schema: The Superset schema
+        :param table: The SQL table
+        :param schema: The fallback SQL schema if not present in the table
         :returns: Whether the use can access the SQL table
         """
 
         from superset import db
+        from superset.connectors.sqla.models import SqlaTable
 
         if self.database_access(database) or self.all_datasource_access():
             return True
 
-        schema_perm = self.get_schema_perm(database, schema)
+        schema_perm = self.get_schema_perm(database, schema=table.schema or schema)
         if schema_perm and self.can_access("schema_access", schema_perm):
             return True
 
-        datasources = ConnectorRegistry.query_datasources_by_name(
-            db.session, database, table_name, schema=schema
+        datasources = SqlaTable.query_datasources_by_name(
+            db.session, database, table.table, schema=table.schema or schema
         )
         for datasource in datasources:
             if self.can_access("datasource_access", datasource.perm):
                 return True
         return False
 
-    def _get_schema_and_table(
-        self, table_in_query: str, schema: str
-    ) -> Tuple[str, str]:
+    def rejected_tables(
+        self, sql: str, database: "Database", schema: str
+    ) -> Set["Table"]:
         """
-        Return the SQL schema/table tuple associated with the table extracted from the
-        SQL query.
-
-        Note the table name conforms to the [[cluster.]schema.]table construct.
-
-        :param table_in_query: The SQL table name
-        :param schema: The fallback SQL schema if not present in the table name
-        :returns: The SQL schema/table tuple
-        """
-
-        table_name_pieces = table_in_query.split(".")
-        if len(table_name_pieces) == 3:
-            return tuple(table_name_pieces[1:])  # type: ignore
-        elif len(table_name_pieces) == 2:
-            return tuple(table_name_pieces)  # type: ignore
-        return (schema, table_name_pieces[0])
-
-    def _datasource_access_by_fullname(
-        self, database: "Database", table_in_query: str, schema: str
-    ) -> bool:
-        """
-        Return True if the user can access the table extracted from the SQL query, False
-        otherwise.
-
-        Note the table name conforms to the [[cluster.]schema.]table construct.
-
-        :param database: The Superset database
-        :param table_in_query: The SQL table name
-        :param schema: The fallback SQL schema, i.e., if not present in the table name
-        :returns: Whether the user can access the SQL table
-        """
-
-        table_schema, table_name = self._get_schema_and_table(table_in_query, schema)
-        return self._datasource_access_by_name(
-            database, table_name, schema=table_schema
-        )
-
-    def rejected_tables(self, sql: str, database: "Database", schema: str) -> List[str]:
-        """
-        Return the list of rejected SQL table names.
-
-        Note the rejected table names conform to the [[cluster.]schema.]table construct.
+        Return the list of rejected SQL tables.
 
         :param sql: The SQL statement
         :param database: The SQL database
         :param schema: The SQL database schema
-        :returns: The rejected table names
+        :returns: The rejected tables
         """
+        query = sql_parse.ParsedQuery(sql)
 
-        superset_query = sql_parse.ParsedQuery(sql)
-
-        return [
-            t
-            for t in superset_query.tables
-            if not self._datasource_access_by_fullname(database, t, schema)
-        ]
+        return {
+            table
+            for table in query.tables
+            if not self.can_access_datasource(database, table, schema)
+        }
 
     def get_public_role(self) -> Optional[Any]:  # Optional[self.role_model]
         from superset import conf
@@ -480,7 +482,7 @@ class SupersetSecurityManager(SecurityManager):
                 .filter(or_(SqlaTable.perm.in_(perms)))
                 .distinct()
             )
-            accessible_schemas.update([t.schema for t in tables])
+            accessible_schemas.update([table.schema for table in tables])
 
         return [s for s in schemas if s in accessible_schemas]
 
@@ -519,7 +521,7 @@ class SupersetSecurityManager(SecurityManager):
             return [d for d in datasource_names if d in names]
         else:
             full_names = {d.full_name for d in user_datasources}
-            return [d for d in datasource_names if d in full_names]
+            return [d for d in datasource_names if f"[{database}].[{d}]" in full_names]
 
     def merge_perm(self, permission_name: str, view_menu_name: str) -> None:
         """
@@ -530,7 +532,7 @@ class SupersetSecurityManager(SecurityManager):
         :see: SecurityManager.add_permission_view_menu
         """
 
-        logging.warning(
+        logger.warning(
             "This method 'merge_perm' is deprecated use add_permission_view_menu"
         )
         self.add_permission_view_menu(permission_name, view_menu_name)
@@ -549,12 +551,9 @@ class SupersetSecurityManager(SecurityManager):
         """
         Create custom FAB permissions.
         """
-
         self.add_permission_view_menu("all_datasource_access", "all_datasource_access")
         self.add_permission_view_menu("all_database_access", "all_database_access")
-        self.add_permission_view_menu(
-            "can_only_access_owned_queries", "can_only_access_owned_queries"
-        )
+        self.add_permission_view_menu("all_query_access", "all_query_access")
 
     def create_missing_perms(self) -> None:
         """
@@ -565,29 +564,29 @@ class SupersetSecurityManager(SecurityManager):
         from superset.connectors.base.models import BaseMetric
         from superset.models import core as models
 
-        logging.info("Fetching a set of all perms to lookup which ones are missing")
+        logger.info("Fetching a set of all perms to lookup which ones are missing")
         all_pvs = set()
         for pv in self.get_session.query(self.permissionview_model).all():
             if pv.permission and pv.view_menu:
                 all_pvs.add((pv.permission.name, pv.view_menu.name))
 
-        def merge_pv(view_menu, perm):
+        def merge_pv(view_menu: str, perm: str) -> None:
             """Create permission view menu only if it doesn't exist"""
             if view_menu and perm and (view_menu, perm) not in all_pvs:
                 self.add_permission_view_menu(view_menu, perm)
 
-        logging.info("Creating missing datasource permissions.")
+        logger.info("Creating missing datasource permissions.")
         datasources = ConnectorRegistry.get_all_datasources(db.session)
         for datasource in datasources:
             merge_pv("datasource_access", datasource.get_perm())
             merge_pv("schema_access", datasource.get_schema_perm())
 
-        logging.info("Creating missing database permissions.")
+        logger.info("Creating missing database permissions.")
         databases = db.session.query(models.Database).all()
         for database in databases:
             merge_pv("database_access", database.perm)
 
-        logging.info("Creating missing metrics permissions")
+        logger.info("Creating missing metrics permissions")
         metrics: List[BaseMetric] = []
         for datasource_class in ConnectorRegistry.sources.values():
             metrics += list(db.session.query(datasource_class.metric_class).all())
@@ -597,7 +596,7 @@ class SupersetSecurityManager(SecurityManager):
         Clean up the FAB faulty permissions.
         """
 
-        logging.info("Cleaning faulty perms")
+        logger.info("Cleaning faulty perms")
         sesh = self.get_session
         pvms = sesh.query(ab_models.PermissionView).filter(
             or_(
@@ -608,7 +607,7 @@ class SupersetSecurityManager(SecurityManager):
         deleted_count = pvms.delete()
         sesh.commit()
         if deleted_count:
-            logging.info("Deleted {} faulty permissions".format(deleted_count))
+            logger.info("Deleted {} faulty permissions".format(deleted_count))
 
     def sync_role_definitions(self) -> None:
         """
@@ -617,7 +616,7 @@ class SupersetSecurityManager(SecurityManager):
 
         from superset import conf
 
-        logging.info("Syncing role definition")
+        logger.info("Syncing role definition")
 
         self.create_custom_permissions()
 
@@ -645,7 +644,7 @@ class SupersetSecurityManager(SecurityManager):
         :param pvm_check: The FAB permission/view check
         """
 
-        logging.info("Syncing {} perms".format(role_name))
+        logger.info("Syncing {} perms".format(role_name))
         sesh = self.get_session
         pvms = sesh.query(ab_models.PermissionView).all()
         pvms = [p for p in pvms if p.permission and p.view_menu]
@@ -763,6 +762,7 @@ class SupersetSecurityManager(SecurityManager):
                 "can_csv",
                 "can_search_queries",
                 "can_sqllab_viz",
+                "can_sqllab_table_viz",
                 "can_sqllab",
             }
             or (
@@ -865,8 +865,7 @@ class SupersetSecurityManager(SecurityManager):
 
         if not self.datasource_access(datasource):
             raise SupersetSecurityException(
-                self.get_datasource_access_error_msg(datasource),
-                self.get_datasource_access_link(datasource),
+                self.get_datasource_access_error_object(datasource),
             )
 
     def assert_query_context_permission(self, query_context: "QueryContext") -> None:
@@ -888,3 +887,48 @@ class SupersetSecurityManager(SecurityManager):
         """
 
         self.assert_datasource_permission(viz.datasource)
+
+    def get_rls_filters(self, table: "BaseDatasource") -> List[Query]:
+        """
+        Retrieves the appropriate row level security filters for the current user and the passed table.
+
+        :param table: The table to check against
+        :returns: A list of filters.
+        """
+        if hasattr(g, "user") and hasattr(g.user, "id"):
+            from superset import db
+            from superset.connectors.sqla.models import (
+                RLSFilterRoles,
+                RowLevelSecurityFilter,
+            )
+
+            user_roles = (
+                db.session.query(assoc_user_role.c.role_id)
+                .filter(assoc_user_role.c.user_id == g.user.id)
+                .subquery()
+            )
+            filter_roles = (
+                db.session.query(RLSFilterRoles.c.rls_filter_id)
+                .filter(RLSFilterRoles.c.role_id.in_(user_roles))
+                .subquery()
+            )
+            query = (
+                db.session.query(
+                    RowLevelSecurityFilter.id, RowLevelSecurityFilter.clause
+                )
+                .filter(RowLevelSecurityFilter.table_id == table.id)
+                .filter(RowLevelSecurityFilter.id.in_(filter_roles))
+            )
+            return query.all()
+        return []
+
+    def get_rls_ids(self, table: "BaseDatasource") -> List[int]:
+        """
+        Retrieves the appropriate row level security filters IDs for the current user and the passed table.
+
+        :param table: The table to check against
+        :returns: A list of IDs.
+        """
+        ids = [f.id for f in self.get_rls_filters(table)]
+        ids.sort()  # Combinations rather than permutations
+        return ids

@@ -18,48 +18,50 @@ import logging
 
 from colorama import Fore, Style
 
+logger = logging.getLogger(__name__)
+
 
 class BaseStatsLogger:
     """Base class for logging realtime events"""
 
-    def __init__(self, prefix="superset"):
+    def __init__(self, prefix: str = "superset") -> None:
         self.prefix = prefix
 
-    def key(self, key):
+    def key(self, key: str) -> str:
         if self.prefix:
             return self.prefix + key
         return key
 
-    def incr(self, key):
+    def incr(self, key: str) -> None:
         """Increment a counter"""
         raise NotImplementedError()
 
-    def decr(self, key):
+    def decr(self, key: str) -> None:
         """Decrement a counter"""
         raise NotImplementedError()
 
-    def timing(self, key, value):
+    def timing(self, key, value: float) -> None:
         raise NotImplementedError()
 
-    def gauge(self, key):
+    def gauge(self, key: str) -> None:
         """Setup a gauge"""
         raise NotImplementedError()
 
 
 class DummyStatsLogger(BaseStatsLogger):
     def incr(self, key):
-        logging.debug(Fore.CYAN + "[stats_logger] (incr) " + key + Style.RESET_ALL)
+        logger.debug(Fore.CYAN + "[stats_logger] (incr) " + key + Style.RESET_ALL)
 
     def decr(self, key):
-        logging.debug((Fore.CYAN + "[stats_logger] (decr) " + key + Style.RESET_ALL))
+        logger.debug((Fore.CYAN + "[stats_logger] (decr) " + key + Style.RESET_ALL))
 
     def timing(self, key, value):
-        logging.debug(
+        logger.debug(
             (Fore.CYAN + f"[stats_logger] (timing) {key} | {value} " + Style.RESET_ALL)
         )
 
     def gauge(self, key):
-        logging.debug(
+        logger.debug(
             (Fore.CYAN + "[stats_logger] (gauge) " + f"{key}" + Style.RESET_ALL)
         )
 

@@ -25,7 +25,30 @@ from sqlalchemy.orm import foreign, Query, relationship
 from superset.constants import NULL_STRING
 from superset.models.helpers import AuditMixinNullable, ImportMixin, QueryResult
 from superset.models.slice import Slice
+from superset.typing import FilterValue, FilterValues
 from superset.utils import core as utils
+
+METRIC_FORM_DATA_PARAMS = [
+    "metric",
+    "metrics",
+    "metric_2",
+    "percent_metrics",
+    "secondary_metric",
+    "size",
+    "timeseries_limit_metric",
+    "x",
+    "y",
+]
+
+COLUMN_FORM_DATA_PARAMS = [
+    "all_columns",
+    "all_columns_x",
+    "columns",
+    "entity",
+    "groupby",
+    "order_by_cols",
+    "series",
+]
 
 
 class BaseDatasource(
@@ -54,7 +77,7 @@ class BaseDatasource(
     # ---------------------------------------------------------------
 
     # Columns
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     description = Column(Text)
     default_endpoint = Column(Text)
     is_featured = Column(Boolean, default=False)  # TODO deprecating
@@ -213,30 +236,99 @@ class BaseDatasource(
             "select_star": self.select_star,
         }
 
+    def data_for_slices(self, slices: List[Slice]) -> Dict[str, Any]:
+        """
+        The representation of the datasource containing only the required data
+        to render the provided slices.
+
+        Used to reduce the payload when loading a dashboard.
+        """
+        data = self.data
+        metric_names = set()
+        column_names = set()
+        for slc in slices:
+            form_data = slc.form_data
+
+            # pull out all required metrics from the form_data
+            for param in METRIC_FORM_DATA_PARAMS:
+                for metric in utils.get_iterable(form_data.get(param) or []):
+                    metric_names.add(utils.get_metric_name(metric))
+
+                    if utils.is_adhoc_metric(metric):
+                        column_names.add(
+                            (metric.get("column") or {}).get("column_name")
+                        )
+
+            # pull out all required columns from the form_data
+            for filter_ in form_data.get("adhoc_filters") or []:
+                if filter_["clause"] == "WHERE" and filter_.get("subject"):
+                    column_names.add(filter_.get("subject"))
+
+            for param in COLUMN_FORM_DATA_PARAMS:
+                for column in utils.get_iterable(form_data.get(param) or []):
+                    column_names.add(column)
+
+        filtered_metrics = [
+            metric
+            for metric in data["metrics"]
+            if metric["metric_name"] in metric_names
+        ]
+
+        filtered_columns = [
+            column
+            for column in data["columns"]
+            if column["column_name"] in column_names
+        ]
+
+        del data["description"]
+        data.update({"metrics": filtered_metrics})
+        data.update({"columns": filtered_columns})
+        verbose_map = {"__timestamp": "Time"}
+        verbose_map.update(
+            {
+                metric["metric_name"]: metric["verbose_name"] or metric["metric_name"]
+                for metric in filtered_metrics
+            }
+        )
+        verbose_map.update(
+            {
+                column["column_name"]: column["verbose_name"] or column["column_name"]
+                for column in filtered_columns
+            }
+        )
+        data["verbose_map"] = verbose_map
+
+        return data
+
     @staticmethod
     def filter_values_handler(
-        values, target_column_is_numeric=False, is_list_target=False
-    ):
-        def handle_single_value(v):
+        values: Optional[FilterValues],
+        target_column_is_numeric: bool = False,
+        is_list_target: bool = False,
+    ) -> Optional[FilterValues]:
+        if values is None:
+            return None
+
+        def handle_single_value(value: Optional[FilterValue]) -> Optional[FilterValue]:
             # backward compatibility with previous <select> components
-            if isinstance(v, str):
-                v = v.strip("\t\n'\"")
+            if isinstance(value, str):
+                value = value.strip("\t\n'\"")
                 if target_column_is_numeric:
                     # For backwards compatibility and edge cases
                     # where a column data type might have changed
-                    v = utils.string_to_num(v)
-                if v == NULL_STRING:
+                    value = utils.cast_to_num(value)
+                if value == NULL_STRING:
                     return None
-                elif v == "<empty string>":
+                elif value == "<empty string>":
                     return ""
-            return v
+            return value
 
         if isinstance(values, (list, tuple)):
-            values = [handle_single_value(v) for v in values]
+            values = [handle_single_value(v) for v in values]  # type: ignore
         else:
             values = handle_single_value(values)
         if is_list_target and not isinstance(values, (tuple, list)):
-            values = [values]
+            values = [values]  # type: ignore
         elif not is_list_target and isinstance(values, (tuple, list)):
             if values:
                 values = values[0]
@@ -274,7 +366,9 @@ class BaseDatasource(
     def default_query(qry) -> Query:
         return qry
 
-    def get_column(self, column_name: str) -> Optional["BaseColumn"]:
+    def get_column(self, column_name: Optional[str]) -> Optional["BaseColumn"]:
+        if not column_name:
+            return None
         for col in self.columns:
             if col.column_name == column_name:
                 return col
@@ -353,13 +447,21 @@ class BaseDatasource(
         """
         return []
 
+    def __hash__(self) -> int:
+        return hash(self.uid)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BaseDatasource):
+            return NotImplemented
+        return self.uid == other.uid
+
 
 class BaseColumn(AuditMixinNullable, ImportMixin):
     """Interface for column"""
 
     __tablename__: Optional[str] = None  # {connector_name}_column
 
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     column_name = Column(String(255), nullable=False)
     verbose_name = Column(String(1024))
     is_active = Column(Boolean, default=True)
@@ -387,15 +489,15 @@ class BaseColumn(AuditMixinNullable, ImportMixin):
         "DECIMAL",
         "MONEY",
     )
-    date_types = ("DATE", "TIME", "DATETIME")
+    date_types = ("DATE", "TIME")
     str_types = ("VARCHAR", "STRING", "CHAR")
 
     @property
-    def is_num(self) -> bool:
+    def is_numeric(self) -> bool:
         return self.type and any(map(lambda t: t in self.type.upper(), self.num_types))
 
     @property
-    def is_time(self) -> bool:
+    def is_temporal(self) -> bool:
         return self.type and any(map(lambda t: t in self.type.upper(), self.date_types))
 
     @property
@@ -432,7 +534,7 @@ class BaseMetric(AuditMixinNullable, ImportMixin):
 
     __tablename__: Optional[str] = None  # {connector_name}_metric
 
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     metric_name = Column(String(255), nullable=False)
     verbose_name = Column(String(1024))
     metric_type = Column(String(32))

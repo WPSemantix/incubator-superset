@@ -22,7 +22,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from superset import app, cache, db
+from superset import app, cache, db, security_manager
 from superset.connectors.base.models import BaseDatasource
 from superset.connectors.connector_registry import ConnectorRegistry
 from superset.stats_logger import BaseStatsLogger
@@ -33,6 +33,7 @@ from .query_object import QueryObject
 
 config = app.config
 stats_logger: BaseStatsLogger = config["STATS_LOGGER"]
+logger = logging.getLogger(__name__)
 
 
 class QueryContext:
@@ -50,7 +51,7 @@ class QueryContext:
     custom_cache_timeout: Optional[int]
 
     # TODO: Type datasource and query_object dictionary with TypedDict when it becomes
-    # a vanilla python type https://github.com/python/mypy/issues/5288
+    #  a vanilla python type https://github.com/python/mypy/issues/5288
     def __init__(
         self,
         datasource: Dict[str, Any],
@@ -69,8 +70,8 @@ class QueryContext:
         """Returns a pandas dataframe based on the query object"""
 
         # Here, we assume that all the queries will use the same datasource, which is
-        # is a valid assumption for current setting. In a long term, we may or maynot
-        # support multiple queries from different data source.
+        # a valid assumption for current setting. In the long term, we may
+        # support multiple queries from different data sources.
 
         timestamp_format = None
         if self.datasource.type == "table":
@@ -104,6 +105,9 @@ class QueryContext:
                 self.df_metrics_to_num(df, query_object)
 
             df.replace([np.inf, -np.inf], np.nan)
+
+        df = query_object.exec_post_processing(df)
+
         return {
             "query": result.query,
             "status": result.status,
@@ -112,7 +116,7 @@ class QueryContext:
         }
 
     @staticmethod
-    def df_metrics_to_num(  # pylint: disable=invalid-name,no-self-use
+    def df_metrics_to_num(  # pylint: disable=no-self-use
         df: pd.DataFrame, query_object: QueryObject
     ) -> None:
         """Converting metrics to numeric when pandas.read_sql cannot"""
@@ -121,9 +125,7 @@ class QueryContext:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
 
     @staticmethod
-    def get_data(  # pylint: disable=invalid-name,no-self-use
-        df: pd.DataFrame
-    ) -> List[Dict]:
+    def get_data(df: pd.DataFrame,) -> List[Dict]:  # pylint: disable=no-self-use
         return df.to_dict(orient="records")
 
     def get_single_payload(self, query_obj: QueryObject) -> Dict[str, Any]:
@@ -156,12 +158,16 @@ class QueryContext:
             return self.datasource.database.cache_timeout
         return config["CACHE_DEFAULT_TIMEOUT"]
 
-    def cache_key(self, query_obj: QueryObject, **kwargs) -> Optional[str]:
+    def cache_key(self, query_obj: QueryObject, **kwargs: Any) -> Optional[str]:
         extra_cache_keys = self.datasource.get_extra_cache_keys(query_obj.to_dict())
+
         cache_key = (
             query_obj.cache_key(
                 datasource=self.datasource.uid,
                 extra_cache_keys=extra_cache_keys,
+                rls=security_manager.get_rls_ids(self.datasource)
+                if config["ENABLE_ROW_LEVEL_SECURITY"]
+                else [],
                 changed_on=self.datasource.changed_on,
                 **kwargs
             )
@@ -171,11 +177,11 @@ class QueryContext:
         return cache_key
 
     def get_df_payload(  # pylint: disable=too-many-locals,too-many-statements
-        self, query_obj: QueryObject, **kwargs
+        self, query_obj: QueryObject, **kwargs: Any
     ) -> Dict[str, Any]:
         """Handles caching around the df payload retrieval"""
         cache_key = self.cache_key(query_obj, **kwargs)
-        logging.info("Cache key: %s", cache_key)
+        logger.info("Cache key: %s", cache_key)
         is_loaded = False
         stacktrace = None
         df = pd.DataFrame()
@@ -195,12 +201,12 @@ class QueryContext:
                     status = utils.QueryStatus.SUCCESS
                     is_loaded = True
                     stats_logger.incr("loaded_from_cache")
-                except Exception as e:  # pylint: disable=broad-except
-                    logging.exception(e)
-                    logging.error(
-                        "Error reading cache: %s", utils.error_msg_from_exception(e)
+                except Exception as ex:  # pylint: disable=broad-except
+                    logger.exception(ex)
+                    logger.error(
+                        "Error reading cache: %s", utils.error_msg_from_exception(ex)
                     )
-                logging.info("Serving from cache")
+                logger.info("Serving from cache")
 
         if query_obj and not is_loaded:
             try:
@@ -211,11 +217,13 @@ class QueryContext:
                 df = query_result["df"]
                 if status != utils.QueryStatus.FAILED:
                     stats_logger.incr("loaded_from_source")
+                    if not self.force:
+                        stats_logger.incr("loaded_from_source_without_force")
                     is_loaded = True
-            except Exception as e:  # pylint: disable=broad-except
-                logging.exception(e)
+            except Exception as ex:  # pylint: disable=broad-except
+                logger.exception(ex)
                 if not error_message:
-                    error_message = "{}".format(e)
+                    error_message = "{}".format(ex)
                 status = utils.QueryStatus.FAILED
                 stacktrace = utils.get_stacktrace()
 
@@ -224,17 +232,17 @@ class QueryContext:
                     cache_value = dict(dttm=cached_dttm, df=df, query=query)
                     cache_binary = pkl.dumps(cache_value, protocol=pkl.HIGHEST_PROTOCOL)
 
-                    logging.info(
+                    logger.info(
                         "Caching %d chars at key %s", len(cache_binary), cache_key
                     )
 
                     stats_logger.incr("set_cache_key")
                     cache.set(cache_key, cache_binary, timeout=self.cache_timeout)
-                except Exception as e:  # pylint: disable=broad-except
+                except Exception as ex:  # pylint: disable=broad-except
                     # cache.set call can fail if the backend is down or if
                     # the key is too large or whatever other reasons
-                    logging.warning("Could not cache key %s", cache_key)
-                    logging.exception(e)
+                    logger.warning("Could not cache key %s", cache_key)
+                    logger.exception(ex)
                     cache.delete(cache_key)
         return {
             "cache_key": cache_key,

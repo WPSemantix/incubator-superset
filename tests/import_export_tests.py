@@ -360,7 +360,7 @@ class ImportExportTests(SupersetTestCase):
         dash_with_1_slice.position_json = """
             {{"DASHBOARD_VERSION_KEY": "v2",
               "DASHBOARD_CHART_TYPE-{0}": {{
-                "type": "DASHBOARD_CHART_TYPE",
+                "type": "CHART",
                 "id": {0},
                 "children": [],
                 "meta": {{
@@ -400,10 +400,15 @@ class ImportExportTests(SupersetTestCase):
         dash_with_2_slices.json_metadata = json.dumps(
             {
                 "remote_id": 10003,
-                "filter_immune_slices": ["{}".format(e_slc.id)],
                 "expanded_slices": {
                     "{}".format(e_slc.id): True,
                     "{}".format(b_slc.id): False,
+                },
+                # mocked filter_scope metadata
+                "filter_scopes": {
+                    str(e_slc.id): {
+                        "region": {"scope": ["ROOT_ID"], "immune": [b_slc.id]}
+                    }
                 },
             }
         )
@@ -421,7 +426,11 @@ class ImportExportTests(SupersetTestCase):
         expected_json_metadata = {
             "remote_id": 10003,
             "import_time": 1991,
-            "filter_immune_slices": ["{}".format(i_e_slc.id)],
+            "filter_scopes": {
+                str(i_e_slc.id): {
+                    "region": {"scope": ["ROOT_ID"], "immune": [i_b_slc.id]}
+                }
+            },
             "expanded_slices": {
                 "{}".format(i_e_slc.id): True,
                 "{}".format(i_b_slc.id): False,
@@ -531,7 +540,7 @@ class ImportExportTests(SupersetTestCase):
         dash_with_1_slice.position_json = """
                 {{"DASHBOARD_VERSION_KEY": "v2",
                 "DASHBOARD_CHART_TYPE-{0}": {{
-                    "type": "DASHBOARD_CHART_TYPE",
+                    "type": "CHART",
                     "id": {0},
                     "children": [],
                     "meta": {{
@@ -549,7 +558,7 @@ class ImportExportTests(SupersetTestCase):
     def test_import_table_no_metadata(self):
         table = self.create_table("pure_table", id=10001)
         imported_id = SqlaTable.import_obj(table, import_time=1989)
-        imported = self.get_table(imported_id)
+        imported = self.get_table_by_id(imported_id)
         self.assert_table_equals(table, imported)
 
     def test_import_table_1_col_1_met(self):
@@ -557,7 +566,7 @@ class ImportExportTests(SupersetTestCase):
             "table_1_col_1_met", id=10002, cols_names=["col1"], metric_names=["metric1"]
         )
         imported_id = SqlaTable.import_obj(table, import_time=1990)
-        imported = self.get_table(imported_id)
+        imported = self.get_table_by_id(imported_id)
         self.assert_table_equals(table, imported)
         self.assertEqual(
             {"remote_id": 10002, "import_time": 1990, "database_name": "examples"},
@@ -573,7 +582,7 @@ class ImportExportTests(SupersetTestCase):
         )
         imported_id = SqlaTable.import_obj(table, import_time=1991)
 
-        imported = self.get_table(imported_id)
+        imported = self.get_table_by_id(imported_id)
         self.assert_table_equals(table, imported)
 
     def test_import_table_override(self):
@@ -590,7 +599,7 @@ class ImportExportTests(SupersetTestCase):
         )
         imported_over_id = SqlaTable.import_obj(table_over, import_time=1992)
 
-        imported_over = self.get_table(imported_over_id)
+        imported_over = self.get_table_by_id(imported_over_id)
         self.assertEqual(imported_id, imported_over.id)
         expected_table = self.create_table(
             "table_override",
@@ -618,7 +627,7 @@ class ImportExportTests(SupersetTestCase):
         imported_id_copy = SqlaTable.import_obj(copy_table, import_time=1994)
 
         self.assertEqual(imported_id, imported_id_copy)
-        self.assert_table_equals(copy_table, self.get_table(imported_id))
+        self.assert_table_equals(copy_table, self.get_table_by_id(imported_id))
 
     def test_import_druid_no_metadata(self):
         datasource = self.create_druid_datasource("pure_druid", id=10001)

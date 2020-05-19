@@ -20,7 +20,6 @@
 import datetime
 import json
 import logging
-import re
 from typing import Any, Callable, Dict, List, Optional, Tuple, Type
 
 import numpy as np
@@ -28,7 +27,10 @@ import pandas as pd
 import pyarrow as pa
 
 from superset import db_engine_specs
+from superset.typing import DbapiDescription, DbapiResult
 from superset.utils import core as utils
+
+logger = logging.getLogger(__name__)
 
 
 def dedup(l: List[str], suffix: str = "__", case_sensitive: bool = True) -> List[str]:
@@ -57,17 +59,29 @@ def dedup(l: List[str], suffix: str = "__", case_sensitive: bool = True) -> List
     return new_l
 
 
+def stringify(obj: Any) -> str:
+    return json.dumps(obj, default=utils.json_iso_dttm_ser)
+
+
+def stringify_values(array: np.ndarray) -> np.ndarray:
+    vstringify: Callable = np.vectorize(stringify)
+    return vstringify(array)
+
+
 class SupersetResultSet:
     def __init__(
         self,
-        data: List[Tuple[Any, ...]],
-        cursor_description: Tuple[Any, ...],
+        data: DbapiResult,
+        cursor_description: DbapiDescription,
         db_engine_spec: Type[db_engine_specs.BaseEngineSpec],
     ):
+        self.db_engine_spec = db_engine_spec
         data = data or []
         column_names: List[str] = []
         pa_data: List[pa.Array] = []
         deduped_cursor_desc: List[Tuple[Any, ...]] = []
+        numpy_dtype: List[Tuple[str, ...]] = []
+        stringified_arr: np.ndarray
 
         if cursor_description:
             # get deduped list of column names
@@ -79,39 +93,53 @@ class SupersetResultSet:
                 for column_name, description in zip(column_names, cursor_description)
             ]
 
-        # put data in a 2D array so we can efficiently access each column;
-        array = np.array(data, dtype="object")
-        if array.size > 0:
-            pa_data = [pa.array(array[:, i]) for i, column in enumerate(column_names)]
+            # generate numpy structured array dtype
+            numpy_dtype = [(column_name, "object") for column_name in column_names]
 
-        # workaround for bug converting `psycopg2.tz.FixedOffsetTimezone` tzinfo values.
-        # related: https://issues.apache.org/jira/browse/ARROW-5248
+        # only do expensive recasting if datatype is not standard list of tuples
+        if data and (not isinstance(data, list) or not isinstance(data[0], tuple)):
+            data = [tuple(row) for row in data]
+        array = np.array(data, dtype=numpy_dtype)
+        if array.size > 0:
+            for column in column_names:
+                try:
+                    pa_data.append(pa.array(array[column].tolist()))
+                except (
+                    pa.lib.ArrowInvalid,
+                    pa.lib.ArrowTypeError,
+                    pa.lib.ArrowNotImplementedError,
+                    TypeError,  # this is super hackey, https://issues.apache.org/jira/browse/ARROW-7855
+                ):
+                    # attempt serialization of values as strings
+                    stringified_arr = stringify_values(array[column])
+                    pa_data.append(pa.array(stringified_arr.tolist()))
+
         if pa_data:
             for i, column in enumerate(column_names):
-                # TODO: revisit nested column serialization once Arrow 1.0 is released with:
-                # https://github.com/apache/arrow/pull/6199
-                # Related issue: #8978
                 if pa.types.is_nested(pa_data[i].type):
-                    stringify_func = lambda item: json.dumps(
-                        item, default=utils.json_iso_dttm_ser
-                    )
-                    vfunc = np.vectorize(stringify_func)
-                    strigified_arr = vfunc(array[:, i])
-                    pa_data[i] = pa.array(strigified_arr)
+                    # TODO: revisit nested column serialization once nested types
+                    #  are added as a natively supported column type in Superset
+                    #  (superset.utils.core.DbColumnType).
+                    stringified_arr = stringify_values(array[column])
+                    pa_data[i] = pa.array(stringified_arr.tolist())
 
                 elif pa.types.is_temporal(pa_data[i].type):
-                    sample = self.first_nonempty(array[:, i])
+                    # workaround for bug converting `psycopg2.tz.FixedOffsetTimezone` tzinfo values.
+                    # related: https://issues.apache.org/jira/browse/ARROW-5248
+                    sample = self.first_nonempty(array[column])
                     if sample and isinstance(sample, datetime.datetime):
                         try:
                             if sample.tzinfo:
                                 tz = sample.tzinfo
-                                series = pd.Series(array[:, i], dtype="datetime64[ns]")
+                                series = pd.Series(
+                                    array[column], dtype="datetime64[ns]"
+                                )
                                 series = pd.to_datetime(series).dt.tz_localize(tz)
                                 pa_data[i] = pa.Array.from_pandas(
                                     series, type=pa.timestamp("ns", tz=tz)
                                 )
-                        except Exception as e:
-                            logging.exception(e)
+                        except Exception as ex:
+                            logger.exception(ex)
 
         self.table = pa.Table.from_arrays(pa_data, names=column_names)
         self._type_dict: Dict[str, Any] = {}
@@ -122,8 +150,8 @@ class SupersetResultSet:
                 for i, col in enumerate(column_names)
                 if deduped_cursor_desc
             }
-        except Exception as e:
-            logging.exception(e)
+        except Exception as ex:
+            logger.exception(ex)
 
     @staticmethod
     def convert_pa_dtype(pa_dtype: pa.DataType) -> Optional[str]:
@@ -147,9 +175,10 @@ class SupersetResultSet:
     def first_nonempty(items: List) -> Any:
         return next((i for i in items if i), None)
 
-    @staticmethod
-    def is_date(db_type_str: Optional[str]) -> bool:
-        return db_type_str in ("DATETIME", "TIMESTAMP")
+    def is_temporal(self, db_type_str: Optional[str]) -> bool:
+        return self.db_engine_spec.is_db_column_type_match(
+            db_type_str, utils.DbColumnType.TEMPORAL
+        )
 
     def data_type(self, col_name: str, pa_dtype: pa.DataType) -> Optional[str]:
         """Given a pyarrow data type, Returns a generic database type"""
@@ -185,7 +214,7 @@ class SupersetResultSet:
             column = {
                 "name": col.name,
                 "type": db_type_str,
-                "is_date": self.is_date(db_type_str),
+                "is_date": self.is_temporal(db_type_str),
             }
             columns.append(column)
 

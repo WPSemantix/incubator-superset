@@ -39,35 +39,36 @@ class Datasource(BaseSupersetView):
     def save(self) -> Response:
         data = request.form.get("data")
         if not isinstance(data, str):
-            return json_error_response("Request missing data field.", status="500")
+            return json_error_response("Request missing data field.", status=500)
 
-        datasource = json.loads(data)
-        datasource_id = datasource.get("id")
-        datasource_type = datasource.get("type")
+        datasource_dict = json.loads(data)
+        datasource_id = datasource_dict.get("id")
+        datasource_type = datasource_dict.get("type")
+        database_id = datasource_dict["database"].get("id")
         orm_datasource = ConnectorRegistry.get_datasource(
             datasource_type, datasource_id, db.session
         )
+        orm_datasource.database_id = database_id
 
-        if "owners" in datasource and orm_datasource.owner_class is not None:
-            datasource["owners"] = (
+        if "owners" in datasource_dict and orm_datasource.owner_class is not None:
+            datasource_dict["owners"] = (
                 db.session.query(orm_datasource.owner_class)
-                .filter(orm_datasource.owner_class.id.in_(datasource["owners"]))
+                .filter(orm_datasource.owner_class.id.in_(datasource_dict["owners"]))
                 .all()
             )
 
         duplicates = [
             name
             for name, count in Counter(
-                [col["column_name"] for col in datasource["columns"]]
+                [col["column_name"] for col in datasource_dict["columns"]]
             ).items()
             if count > 1
         ]
         if duplicates:
             return json_error_response(
-                f"Duplicate column name(s): {','.join(duplicates)}", status="409"
+                f"Duplicate column name(s): {','.join(duplicates)}", status=409
             )
-
-        orm_datasource.update_from_object(datasource)
+        orm_datasource.update_from_object(datasource_dict)
         data = orm_datasource.data
         db.session.commit()
 
@@ -84,11 +85,11 @@ class Datasource(BaseSupersetView):
             )
             if not orm_datasource.data:
                 return json_error_response(
-                    "Error fetching datasource data.", status="500"
+                    "Error fetching datasource data.", status=500
                 )
             return self.json_response(orm_datasource.data)
         except NoResultFound:
-            return json_error_response("This datasource does not exist", status="400")
+            return json_error_response("This datasource does not exist", status=400)
 
     @expose("/external_metadata/<datasource_type>/<datasource_id>/")
     @has_access_api

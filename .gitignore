@@ -51,16 +51,15 @@ local_config.py
 superset.egg-info/
 superset/bin/supersetc
 tmp
+rat-results.txt
 
 # Node.js, webpack artifacts
 *.entry.js
 *.js.map
 node_modules
 npm-debug.log*
-superset/assets/coverage/*
-superset/assets/cypress/screenshots
-superset/assets/cypress/videos
-superset/assets/version_info.json
+superset/static/assets
+superset/static/version_info.json
 yarn-error.log
 
 # IntelliJ
@@ -81,3 +80,5 @@ apache-superset-*.tar.gz*
 
 # Translation binaries
 messages.mo
+
+docker/requirements-local.txt

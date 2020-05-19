@@ -19,6 +19,7 @@ import logging
 from datetime import datetime
 from subprocess import Popen
 from sys import stdout
+from typing import Type, Union
 
 import click
 import yaml
@@ -33,8 +34,27 @@ from superset.app import create_app
 from superset.extensions import celery_app, db
 from superset.utils import core as utils
 
+logger = logging.getLogger(__name__)
 
-@click.group(cls=FlaskGroup, create_app=create_app)
+
+def normalize_token(token_name: str) -> str:
+    """
+    As of click>=7, underscores in function names are replaced by dashes.
+    To avoid the need to rename all cli functions, e.g. load_examples to
+    load-examples, this function is used to convert dashes back to
+    underscores.
+
+    :param token_name: token name possibly containing dashes
+    :return: token name where dashes are replaced with underscores
+    """
+    return token_name.replace("_", "-")
+
+
+@click.group(
+    cls=FlaskGroup,
+    create_app=create_app,
+    context_settings={"token_normalize_func": normalize_token},
+)
 @with_appcontext
 def superset():
     """This is a management script for the Superset application."""
@@ -178,9 +198,9 @@ def refresh_druid(datasource, merge):
     for cluster in session.query(DruidCluster).all():
         try:
             cluster.refresh_datasources(datasource_name=datasource, merge_flag=merge)
-        except Exception as e:  # pylint: disable=broad-except
-            print("Error while processing cluster '{}'\n{}".format(cluster, str(e)))
-            logging.exception(e)
+        except Exception as ex:  # pylint: disable=broad-except
+            print("Error while processing cluster '{}'\n{}".format(cluster, str(ex)))
+            logger.exception(ex)
         cluster.metadata_last_refreshed = datetime.now()
         print("Refreshed metadata from cluster " "[" + cluster.cluster_name + "]")
     session.commit()
@@ -222,13 +242,13 @@ def import_dashboards(path, recursive, username):
     if username is not None:
         g.user = security_manager.find_user(username=username)
     for file_ in files:
-        logging.info("Importing dashboard from file %s", file_)
+        logger.info("Importing dashboard from file %s", file_)
         try:
             with file_.open() as data_stream:
                 dashboard_import_export.import_dashboards(db.session, data_stream)
-        except Exception as e:  # pylint: disable=broad-except
-            logging.error("Error when importing dashboard from file %s", file_)
-            logging.error(e)
+        except Exception as ex:  # pylint: disable=broad-except
+            logger.error("Error when importing dashboard from file %s", file_)
+            logger.error(ex)
 
 
 @superset.command()
@@ -247,7 +267,7 @@ def export_dashboards(print_stdout, dashboard_file):
     if print_stdout or not dashboard_file:
         print(data)
     if dashboard_file:
-        logging.info("Exporting dashboards to %s", dashboard_file)
+        logger.info("Exporting dashboards to %s", dashboard_file)
         with open(dashboard_file, "w") as data_stream:
             data_stream.write(data)
 
@@ -292,15 +312,15 @@ def import_datasources(path, sync, recursive):
         files.extend(path_object.rglob("*.yaml"))
         files.extend(path_object.rglob("*.yml"))
     for file_ in files:
-        logging.info("Importing datasources from file %s", file_)
+        logger.info("Importing datasources from file %s", file_)
         try:
             with file_.open() as data_stream:
                 dict_import_export.import_from_dict(
                     db.session, yaml.safe_load(data_stream), sync=sync_array
                 )
-        except Exception as e:  # pylint: disable=broad-except
-            logging.error("Error when importing datasources from file %s", file_)
-            logging.error(e)
+        except Exception as ex:  # pylint: disable=broad-except
+            logger.error("Error when importing datasources from file %s", file_)
+            logger.error(ex)
 
 
 @superset.command()
@@ -340,7 +360,7 @@ def export_datasources(
     if print_stdout or not datasource_file:
         yaml.safe_dump(data, stdout, default_flow_style=False)
     if datasource_file:
-        logging.info("Exporting datasources to %s", datasource_file)
+        logger.info("Exporting datasources to %s", datasource_file)
         with open(datasource_file, "w") as data_stream:
             yaml.safe_dump(data, data_stream, default_flow_style=False)
 
@@ -378,8 +398,8 @@ def update_datasources_cache():
                 database.get_all_view_names_in_database(
                     force=True, cache=True, cache_timeout=24 * 60 * 60
                 )
-            except Exception as e:  # pylint: disable=broad-except
-                print("{}".format(str(e)))
+            except Exception as ex:  # pylint: disable=broad-except
+                print("{}".format(str(ex)))
 
 
 @superset.command()
@@ -389,7 +409,7 @@ def update_datasources_cache():
 )
 def worker(workers):
     """Starts a Superset worker for async SQL query execution."""
-    logging.info(
+    logger.info(
         "The 'superset worker' command is deprecated. Please use the 'celery "
         "worker' command instead."
     )
@@ -424,7 +444,7 @@ def flower(port, address):
         f"--port={port} "
         f"--address={address} "
     )
-    logging.info(
+    logger.info(
         "The 'superset flower' command is deprecated. Please use the 'celery "
         "flower' command instead."
     )
@@ -433,6 +453,78 @@ def flower(port, address):
     print(Fore.YELLOW + cmd)
     print(Fore.BLUE + "-=" * 40)
     Popen(cmd, shell=True).wait()
+
+
+@superset.command()
+@with_appcontext
+@click.option(
+    "--asynchronous",
+    "-a",
+    is_flag=True,
+    default=False,
+    help="Trigger commands to run remotely on a worker",
+)
+@click.option(
+    "--dashboards_only",
+    "-d",
+    is_flag=True,
+    default=False,
+    help="Only process dashboards",
+)
+@click.option(
+    "--charts_only", "-c", is_flag=True, default=False, help="Only process charts"
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Force refresh, even if previously cached",
+)
+@click.option("--model_id", "-i", multiple=True)
+def compute_thumbnails(
+    asynchronous: bool,
+    dashboards_only: bool,
+    charts_only: bool,
+    force: bool,
+    model_id: int,
+):
+    """Compute thumbnails"""
+    from superset.models.dashboard import Dashboard
+    from superset.models.slice import Slice
+    from superset.tasks.thumbnails import (
+        cache_chart_thumbnail,
+        cache_dashboard_thumbnail,
+    )
+
+    def compute_generic_thumbnail(
+        friendly_type: str,
+        model_cls: Union[Type[Dashboard], Type[Slice]],
+        model_id: int,
+        compute_func,
+    ):
+        query = db.session.query(model_cls)
+        if model_id:
+            query = query.filter(model_cls.id.in_(model_id))
+        dashboards = query.all()
+        count = len(dashboards)
+        for i, model in enumerate(dashboards):
+            if asynchronous:
+                func = compute_func.delay
+                action = "Triggering"
+            else:
+                func = compute_func
+                action = "Processing"
+            msg = f'{action} {friendly_type} "{model}" ({i+1}/{count})'
+            click.secho(msg, fg="green")
+            func(model.id, force=force)
+
+    if not charts_only:
+        compute_generic_thumbnail(
+            "dashboard", Dashboard, model_id, cache_dashboard_thumbnail
+        )
+    if not dashboards_only:
+        compute_generic_thumbnail("chart", Slice, model_id, cache_chart_thumbnail)
 
 
 @superset.command()

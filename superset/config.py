@@ -28,16 +28,25 @@ import os
 import sys
 from collections import OrderedDict
 from datetime import date
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
 from celery.schedules import crontab
 from dateutil import tz
 from flask_appbuilder.security.manager import AUTH_DB
 
+from superset.jinja_context import (  # pylint: disable=unused-import
+    BaseTemplateProcessor,
+)
 from superset.stats_logger import DummyStatsLogger
 from superset.typing import CacheConfig
 from superset.utils.log import DBEventLogger
 from superset.utils.logging_configurator import DefaultLoggingConfigurator
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from flask_appbuilder.security.sqla import models  # pylint: disable=unused-import
+    from superset.models.core import Database  # pylint: disable=unused-import
 
 # Realtime stats logger, a StatsD implementation exists
 STATS_LOGGER = DummyStatsLogger()
@@ -54,9 +63,8 @@ else:
 # ---------------------------------------------------------
 # Superset specific config
 # ---------------------------------------------------------
-PACKAGE_DIR = os.path.join(BASE_DIR, "static", "assets")
-VERSION_INFO_FILE = os.path.join(PACKAGE_DIR, "version_info.json")
-PACKAGE_JSON_FILE = os.path.join(BASE_DIR, "assets", "package.json")
+VERSION_INFO_FILE = os.path.join(BASE_DIR, "static", "version_info.json")
+PACKAGE_JSON_FILE = os.path.join(BASE_DIR, "static", "assets", "package.json")
 
 # Multiple favicons can be specified here. The "href" property
 # is mandatory, but "sizes," "type," and "rel" are optional.
@@ -275,7 +283,16 @@ DEFAULT_FEATURE_FLAGS = {
     # Experimental feature introducing a client (browser) cache
     "CLIENT_CACHE": False,
     "ENABLE_EXPLORE_JSON_CSRF_PROTECTION": False,
+    "KV_STORE": False,
     "PRESTO_EXPAND_DATA": False,
+    # Exposes API endpoint to compute thumbnails
+    "THUMBNAILS": False,
+    "REDUCE_DASHBOARD_BOOTSTRAP_PAYLOAD": True,
+    "SHARE_QUERIES_VIA_KV_STORE": False,
+    "SIP_38_VIZ_REARCHITECTURE": False,
+    "TAGGING_SYSTEM": False,
+    "SQLLAB_BACKEND_PERSISTENCE": False,
+    "LIST_VIEWS_NEW_UI": False,
 }
 
 # This is merely a default.
@@ -291,17 +308,24 @@ FEATURE_FLAGS: Dict[str, bool] = {}
 # role-based features, or a full on A/B testing framework.
 #
 # from flask import g, request
-# def GET_FEATURE_FLAGS_FUNC(feature_flags_dict):
-#     feature_flags_dict['some_feature'] = g.user and g.user.id == 5
+# def GET_FEATURE_FLAGS_FUNC(feature_flags_dict: Dict[str, bool]) -> Dict[str, bool]:
+#     if hasattr(g, "user") and g.user.is_active:
+#         feature_flags_dict['some_feature'] = g.user and g.user.id == 5
 #     return feature_flags_dict
-GET_FEATURE_FLAGS_FUNC = None
+GET_FEATURE_FLAGS_FUNC: Optional[Callable[[Dict[str, bool]], Dict[str, bool]]] = None
 
+# ---------------------------------------------------
+# Thumbnail config (behind feature flag)
+# ---------------------------------------------------
+THUMBNAIL_SELENIUM_USER = "Admin"
+THUMBNAIL_CACHE_CONFIG: CacheConfig = {"CACHE_TYPE": "null"}
 
 # ---------------------------------------------------
 # Image and file configuration
 # ---------------------------------------------------
 # The file upload folder, when using models with files
 UPLOAD_FOLDER = BASE_DIR + "/app/static/uploads/"
+UPLOAD_CHUNK_SIZE = 4096
 
 # The image upload folder, when using models with images
 IMG_UPLOAD_FOLDER = BASE_DIR + "/app/static/uploads/"
@@ -351,13 +375,14 @@ TIME_GRAIN_BLACKLIST: List[str] = []
 TIME_GRAIN_ADDONS: Dict[str, str] = {}
 
 # Implementation of additional time grains per engine.
+# The column to be truncated is denoted `{col}` in the expression.
 # For example: To implement 2 second time grain on clickhouse engine:
-# TIME_GRAIN_ADDON_FUNCTIONS = {
+# TIME_GRAIN_ADDON_EXPRESSIONS = {
 #     'clickhouse': {
 #         'PT2S': 'toDateTime(intDiv(toUInt32(toDateTime({col})), 2)*2)'
 #     }
 # }
-TIME_GRAIN_ADDON_FUNCTIONS: Dict[str, Dict[str, str]] = {}
+TIME_GRAIN_ADDON_EXPRESSIONS: Dict[str, Dict[str, str]] = {}
 
 # ---------------------------------------------------
 # List of viz_types not allowed in your environment
@@ -517,7 +542,33 @@ SQLLAB_ASYNC_TIME_LIMIT_SEC = 60 * 60 * 6
 # timeout.
 SQLLAB_QUERY_COST_ESTIMATE_TIMEOUT = 10  # seconds
 
-# An instantiated derivative of werkzeug.contrib.cache.BaseCache
+# Flag that controls if limit should be enforced on the CTA (create table as queries).
+SQLLAB_CTAS_NO_LIMIT = False
+
+# This allows you to define custom logic around the "CREATE TABLE AS" or CTAS feature
+# in SQL Lab that defines where the target schema should be for a given user.
+# Database `CTAS Schema` has a precedence over this setting.
+# Example below returns a username and CTA queries will write tables into the schema
+# name `username`
+# SQLLAB_CTAS_SCHEMA_NAME_FUNC = lambda database, user, schema, sql: user.username
+# This is move involved example where depending on the database you can leverage data
+# available to assign schema for the CTA query:
+# def compute_schema_name(database: Database, user: User, schema: str, sql: str) -> str:
+#     if database.name == 'mysql_payments_slave':
+#         return 'tmp_superset_schema'
+#     if database.name == 'presto_gold':
+#         return user.username
+#     if database.name == 'analytics':
+#         if 'analytics' in [r.name for r in user.roles]:
+#             return 'analytics_cta'
+#         else:
+#             return f'tmp_{schema}'
+# Function accepts database object, user object, schema name and sql that will be run.
+SQLLAB_CTAS_SCHEMA_NAME_FUNC: Optional[
+    Callable[["Database", "models.User", str, str], str]
+] = None
+
+# An instantiated derivative of cachelib.base.BaseCache
 # if enabled, it can be used to store the results of long-running queries
 # in SQL Lab by using the "Run Async" button/feature
 RESULTS_BACKEND = None
@@ -545,6 +596,13 @@ UPLOADED_CSV_HIVE_NAMESPACE = None
 # meaning values for existing keys get overwritten by the content of this
 # dictionary.
 JINJA_CONTEXT_ADDONS: Dict[str, Callable] = {}
+
+# A dictionary of macro template processors that gets merged into global
+# template processors. The existing template processors get updated with this
+# dictionary, which means the existing keys get overwritten by the content of this
+# dictionary. The customized addons don't necessarily need to use jinjia templating
+# language. This allows you to define custom logic to process macro template.
+CUSTOM_TEMPLATE_PROCESSORS = {}  # type: Dict[str, BaseTemplateProcessor]
 
 # Roles that are controlled by the API / Superset and should not be changes
 # by humans.
@@ -580,6 +638,9 @@ ENABLE_CHUNK_ENCODING = False
 SILENCE_FAB = True
 
 FAB_ADD_SECURITY_VIEWS = True
+FAB_ADD_SECURITY_PERMISSION_VIEW = False
+FAB_ADD_SECURITY_VIEW_MENU_VIEW = False
+FAB_ADD_SECURITY_PERMISSION_VIEWS_VIEW = False
 
 # The link to a page containing common errors and their resolutions
 # It will be appended at the bottom of sql_lab errors.
@@ -690,6 +751,11 @@ WEBDRIVER_CONFIGURATION: Dict[Any, Any] = {}
 
 # The base URL to query for accessing the user interface
 WEBDRIVER_BASEURL = "http://0.0.0.0:8080/"
+# The base URL for the email report hyperlinks.
+WEBDRIVER_BASEURL_USER_FRIENDLY = WEBDRIVER_BASEURL
+# Time in seconds, selenium will wait for the page to load
+# and render for the email report.
+EMAIL_PAGE_RENDER_WAIT = 30
 
 # Send user to a link where they can report bugs
 BUG_REPORT_URL = None
@@ -725,6 +791,15 @@ TALISMAN_CONFIG = {
     "force_https_permanent": False,
 }
 
+# Note that: RowLevelSecurityFilter is only given by default to the Admin role
+# and the Admin Role does have the all_datasources security permission.
+# But, if users create a specific role with access to RowLevelSecurityFilter MVC
+# and a custom datasource access, the table dropdown will not be correctly filtered
+# by that custom datasource access. So we are assuming a default security config,
+# a custom security config could potentially give access to setting filters on
+# tables that users do not have access to.
+ENABLE_ROW_LEVEL_SECURITY = False
+
 #
 # Flask session cookie options
 #
@@ -742,6 +817,15 @@ SEND_FILE_MAX_AGE_DEFAULT = 60 * 60 * 24 * 365  # Cache static resources
 # SQLALCHEMY_DATABASE_URI by default if set to `None`
 SQLALCHEMY_EXAMPLES_URI = None
 
+# Some sqlalchemy connection strings can open Superset to security risks.
+# Typically these should not be allowed.
+PREVENT_UNSAFE_DB_CONNECTIONS = True
+
+# Path used to store SSL certificates that are generated when using custom certs.
+# Defaults to temporary directory.
+# Example: SSL_CERT_PATH = "/certs"
+SSL_CERT_PATH: Optional[str] = None
+
 # SIP-15 should be enabled for all new Superset deployments which ensures that the time
 # range endpoints adhere to [start, end). For existing deployments admins should provide
 # a dedicated period of time to allow chart producers to update their charts before
@@ -749,12 +833,12 @@ SQLALCHEMY_EXAMPLES_URI = None
 #
 # Note if no end date for the grace period is specified then the grace period is
 # indefinite.
-SIP_15_ENABLED = False
+SIP_15_ENABLED = True
 SIP_15_GRACE_PERIOD_END: Optional[date] = None  # exclusive
 SIP_15_DEFAULT_TIME_RANGE_ENDPOINTS = ["unknown", "inclusive"]
 SIP_15_TOAST_MESSAGE = (
-    "Action Required: Preview then save your chart using the"
-    'new time range endpoints <a target="_blank" href="{url}"'
+    "Action Required: Preview then save your chart using the "
+    'new time range endpoints <a target="_blank" href="{url}" '
     'class="alert-link">here</a>.'
 )
 
@@ -771,7 +855,7 @@ if CONFIG_PATH_ENV_VAR in os.environ:
 
         print(f"Loaded your LOCAL configuration at [{cfg_path}]")
     except Exception:
-        logging.exception(
+        logger.exception(
             f"Failed to import config for {CONFIG_PATH_ENV_VAR}={cfg_path}"
         )
         raise
@@ -782,5 +866,5 @@ elif importlib.util.find_spec("superset_config"):
 
         print(f"Loaded your LOCAL configuration at [{superset_config.__file__}]")
     except Exception:
-        logging.exception("Found but failed to import local superset_config")
+        logger.exception("Found but failed to import local superset_config")
         raise

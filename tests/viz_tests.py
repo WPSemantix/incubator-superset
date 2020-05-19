@@ -14,14 +14,17 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# isort:skip_file
 import uuid
 from datetime import datetime
+import logging
 from math import nan
 from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
 
+import tests.test_app
 import superset.viz as viz
 from superset import app
 from superset.constants import NULL_STRING
@@ -30,6 +33,8 @@ from superset.utils.core import DTTM_ALIAS
 
 from .base_tests import SupersetTestCase
 from .utils import load_fixture
+
+logger = logging.getLogger(__name__)
 
 
 class BaseVizTestCase(SupersetTestCase):
@@ -114,7 +119,7 @@ class BaseVizTestCase(SupersetTestCase):
         result = test_viz.get_df(query_obj)
         import logging
 
-        logging.info(result)
+        logger.info(result)
         pd.testing.assert_series_equal(
             result[DTTM_ALIAS], pd.Series([datetime(1960, 1, 1, 5, 0)], name=DTTM_ALIAS)
         )
@@ -164,15 +169,7 @@ class BaseVizTestCase(SupersetTestCase):
 class TableVizTestCase(SupersetTestCase):
     def test_get_data_applies_percentage(self):
         form_data = {
-            "percent_metrics": [
-                {
-                    "expressionType": "SIMPLE",
-                    "aggregate": "SUM",
-                    "label": "SUM(value1)",
-                    "column": {"column_name": "value1", "type": "DOUBLE"},
-                },
-                "avg__B",
-            ],
+            "groupby": ["groupA", "groupB"],
             "metrics": [
                 {
                     "expressionType": "SIMPLE",
@@ -183,39 +180,50 @@ class TableVizTestCase(SupersetTestCase):
                 "count",
                 "avg__C",
             ],
+            "percent_metrics": [
+                {
+                    "expressionType": "SIMPLE",
+                    "aggregate": "SUM",
+                    "label": "SUM(value1)",
+                    "column": {"column_name": "value1", "type": "DOUBLE"},
+                },
+                "avg__B",
+            ],
         }
         datasource = self.get_datasource_mock()
-        raw = {}
-        raw["SUM(value1)"] = [15, 20, 25, 40]
-        raw["avg__B"] = [10, 20, 5, 15]
-        raw["avg__C"] = [11, 22, 33, 44]
-        raw["count"] = [6, 7, 8, 9]
-        raw["groupA"] = ["A", "B", "C", "C"]
-        raw["groupB"] = ["x", "x", "y", "z"]
-        df = pd.DataFrame(raw)
+
+        df = pd.DataFrame(
+            {
+                "SUM(value1)": [15, 20, 25, 40],
+                "avg__B": [10, 20, 5, 15],
+                "avg__C": [11, 22, 33, 44],
+                "count": [6, 7, 8, 9],
+                "groupA": ["A", "B", "C", "C"],
+                "groupB": ["x", "x", "y", "z"],
+            }
+        )
+
         test_viz = viz.TableViz(datasource, form_data)
         data = test_viz.get_data(df)
         # Check method correctly transforms data and computes percents
         self.assertEqual(
-            set(
-                [
-                    "groupA",
-                    "groupB",
-                    "count",
-                    "SUM(value1)",
-                    "avg__C",
-                    "%SUM(value1)",
-                    "%avg__B",
-                ]
-            ),
-            set(data["columns"]),
+            [
+                "groupA",
+                "groupB",
+                "SUM(value1)",
+                "count",
+                "avg__C",
+                "%SUM(value1)",
+                "%avg__B",
+            ],
+            list(data["columns"]),
         )
         expected = [
             {
                 "groupA": "A",
                 "groupB": "x",
-                "count": 6,
                 "SUM(value1)": 15,
+                "count": 6,
                 "avg__C": 11,
                 "%SUM(value1)": 0.15,
                 "%avg__B": 0.2,
@@ -223,8 +231,8 @@ class TableVizTestCase(SupersetTestCase):
             {
                 "groupA": "B",
                 "groupB": "x",
-                "count": 7,
                 "SUM(value1)": 20,
+                "count": 7,
                 "avg__C": 22,
                 "%SUM(value1)": 0.2,
                 "%avg__B": 0.4,
@@ -232,8 +240,8 @@ class TableVizTestCase(SupersetTestCase):
             {
                 "groupA": "C",
                 "groupB": "y",
-                "count": 8,
                 "SUM(value1)": 25,
+                "count": 8,
                 "avg__C": 33,
                 "%SUM(value1)": 0.25,
                 "%avg__B": 0.1,
@@ -241,10 +249,10 @@ class TableVizTestCase(SupersetTestCase):
             {
                 "groupA": "C",
                 "groupB": "z",
-                "count": 9,
                 "SUM(value1)": 40,
+                "count": 9,
                 "avg__C": 44,
-                "%SUM(value1)": 0.40,
+                "%SUM(value1)": 0.4,
                 "%avg__B": 0.3,
             },
         ]
@@ -398,6 +406,32 @@ class TableVizTestCase(SupersetTestCase):
         test_viz = viz.TableViz(datasource, form_data)
         with self.assertRaises(Exception):
             test_viz.should_be_timeseries()
+
+    def test_adhoc_metric_with_sortby(self):
+        metrics = [
+            {
+                "expressionType": "SIMPLE",
+                "aggregate": "SUM",
+                "label": "sum_value",
+                "column": {"column_name": "value1", "type": "DOUBLE"},
+            }
+        ]
+        form_data = {
+            "metrics": metrics,
+            "timeseries_limit_metric": {
+                "expressionType": "SIMPLE",
+                "aggregate": "SUM",
+                "label": "SUM(value1)",
+                "column": {"column_name": "value1", "type": "DOUBLE"},
+            },
+            "order_desc": False,
+        }
+
+        df = pd.DataFrame({"SUM(value1)": [15], "sum_value": [15]})
+        datasource = self.get_datasource_mock()
+        test_viz = viz.TableViz(datasource, form_data)
+        data = test_viz.get_data(df)
+        self.assertEqual(["sum_value", "SUM(value1)"], data["columns"])
 
 
 class DistBarVizTestCase(SupersetTestCase):
@@ -1047,6 +1081,7 @@ class BaseDeckGLVizTestCase(SupersetTestCase):
                     "comparator": "",
                     "operator": "IS NOT NULL",
                     "subject": "lat",
+                    "isExtra": False,
                 },
                 {
                     "clause": "WHERE",
@@ -1055,6 +1090,7 @@ class BaseDeckGLVizTestCase(SupersetTestCase):
                     "comparator": "",
                     "operator": "IS NOT NULL",
                     "subject": "lon",
+                    "isExtra": False,
                 },
             ],
             "delimited_key": [
@@ -1065,6 +1101,7 @@ class BaseDeckGLVizTestCase(SupersetTestCase):
                     "comparator": "",
                     "operator": "IS NOT NULL",
                     "subject": "lonlat",
+                    "isExtra": False,
                 }
             ],
             "geohash_key": [
@@ -1075,6 +1112,7 @@ class BaseDeckGLVizTestCase(SupersetTestCase):
                     "comparator": "",
                     "operator": "IS NOT NULL",
                     "subject": "geo",
+                    "isExtra": False,
                 }
             ],
         }
@@ -1158,3 +1196,82 @@ class TimeSeriesVizTestCase(SupersetTestCase):
             .tolist(),
             [1.0, 2.0, np.nan, np.nan, 5.0, np.nan, 7.0],
         )
+
+    def test_apply_rolling(self):
+        datasource = self.get_datasource_mock()
+        df = pd.DataFrame(
+            index=pd.to_datetime(
+                ["2019-01-01", "2019-01-02", "2019-01-05", "2019-01-07"]
+            ),
+            data={"y": [1.0, 2.0, 3.0, 4.0]},
+        )
+        self.assertEqual(
+            viz.BigNumberViz(
+                datasource,
+                {
+                    "metrics": ["y"],
+                    "rolling_type": "cumsum",
+                    "rolling_periods": 0,
+                    "min_periods": 0,
+                },
+            )
+            .apply_rolling(df)["y"]
+            .tolist(),
+            [1.0, 3.0, 6.0, 10.0],
+        )
+        self.assertEqual(
+            viz.BigNumberViz(
+                datasource,
+                {
+                    "metrics": ["y"],
+                    "rolling_type": "sum",
+                    "rolling_periods": 2,
+                    "min_periods": 0,
+                },
+            )
+            .apply_rolling(df)["y"]
+            .tolist(),
+            [1.0, 3.0, 5.0, 7.0],
+        )
+        self.assertEqual(
+            viz.BigNumberViz(
+                datasource,
+                {
+                    "metrics": ["y"],
+                    "rolling_type": "mean",
+                    "rolling_periods": 10,
+                    "min_periods": 0,
+                },
+            )
+            .apply_rolling(df)["y"]
+            .tolist(),
+            [1.0, 1.5, 2.0, 2.5],
+        )
+
+
+class BigNumberVizTestCase(SupersetTestCase):
+    def test_get_data(self):
+        datasource = self.get_datasource_mock()
+        df = pd.DataFrame(
+            data={
+                DTTM_ALIAS: pd.to_datetime(
+                    ["2019-01-01", "2019-01-02", "2019-01-05", "2019-01-07"]
+                ),
+                "y": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+        data = viz.BigNumberViz(datasource, {"metrics": ["y"]}).get_data(df)
+        self.assertEqual(data[2], {DTTM_ALIAS: pd.Timestamp("2019-01-05"), "y": 3})
+
+    def test_get_data_with_none(self):
+        datasource = self.get_datasource_mock()
+        df = pd.DataFrame(
+            data={
+                DTTM_ALIAS: pd.to_datetime(
+                    ["2019-01-01", "2019-01-02", "2019-01-05", "2019-01-07"]
+                ),
+                "y": [1.0, 2.0, None, 4.0],
+            }
+        )
+        data = viz.BigNumberViz(datasource, {"metrics": ["y"]}).get_data(df)
+        assert np.isnan(data[2]["y"])

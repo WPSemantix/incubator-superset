@@ -27,7 +27,7 @@ if sys.version_info < (3, 6):
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
-PACKAGE_JSON = os.path.join(BASE_DIR, "superset", "assets", "package.json")
+PACKAGE_JSON = os.path.join(BASE_DIR, "superset-frontend", "package.json")
 with open(PACKAGE_JSON, "r") as package_file:
     version_string = json.load(package_file)["version"]
 
@@ -50,9 +50,7 @@ print("VERSION: " + version_string)
 print("GIT SHA: " + GIT_SHA)
 print("-==-" * 15)
 
-VERSION_INFO_FILE = os.path.join(
-    BASE_DIR, "superset", "static", "assets", "version_info.json"
-)
+VERSION_INFO_FILE = os.path.join(BASE_DIR, "superset", "static", "version_info.json")
 
 with open(VERSION_INFO_FILE, "w") as version_file:
     json.dump(version_info, version_file)
@@ -71,14 +69,16 @@ setup(
     install_requires=[
         "backoff>=1.8.0",
         "bleach>=3.0.2, <4.0.0",
-        "celery>=4.3.0, <5.0.0",
-        "click>=6.0, <7.0.0",  # `click`>=7 forces "-" instead of "_"
+        "cachelib>=0.1,<0.2",
+        "celery>=4.3.0, <5.0.0, !=4.4.1",
+        "click<8",
         "colorama",
         "contextlib2",
         "croniter>=0.3.28",
         "cryptography>=2.4.2",
+        "dataclasses<0.7",
         "flask>=1.1.0, <2.0.0",
-        "flask-appbuilder>=2.2.2, <2.3.0",
+        "flask-appbuilder>=2.3.4, <2.4.0",
         "flask-caching",
         "flask-compress",
         "flask-talisman",
@@ -89,21 +89,24 @@ setup(
         "humanize",
         "isodate",
         "markdown>=3.0",
-        "msgpack>=0.6.1, <0.7.0",
-        "pandas>=0.25.3, <1.0",
+        "msgpack>=1.0.0, <1.1",
+        "pandas>=1.0.3, <1.1",
         "parsedatetime",
         "pathlib2",
         "polyline",
         "python-dateutil",
         "python-dotenv",
         "python-geohash",
-        "pyarrow>=0.15.1, <0.16.0",
+        "pyarrow>=0.17.0, <0.18",
         "pyyaml>=5.1",
         "retry>=0.9.2",
         "selenium>=3.141.0",
         "simplejson>=3.15.0",
-        "sqlalchemy>=1.3.5, <2.0",
-        "sqlalchemy-utils>=0.33.2",
+        "sqlalchemy>=1.3.16, <2.0",
+        # Breaking change in sqlalchemy-utils==0.36.6, upgrading will probably
+        # require a migration on EncryptedType columns. For more information, see
+        # https://github.com/kvesteri/sqlalchemy-utils/issues/444
+        "sqlalchemy-utils>=0.33.2,<0.36.5",
         "sqlparse>=0.3.0, <0.4",
         "wtforms-json",
     ],
@@ -113,12 +116,14 @@ setup(
         "gsheets": ["gsheetsdb>=0.1.9"],
         "hive": ["pyhive[hive]>=0.6.1", "tableschema", "thrift>=0.11.0, <1.0.0"],
         "mysql": ["mysqlclient==1.4.2.post1"],
-        "postgres": ["psycopg2-binary==2.7.5"],
+        "postgres": ["psycopg2-binary==2.8.5"],
         "presto": ["pyhive[presto]>=0.4.0"],
         "elasticsearch": ["elasticsearch-dbapi>=0.1.0, <0.2.0"],
         "druid": ["pydruid==0.5.7", "requests==2.22.0"],
         "hana": ["hdbcli==2.4.162", "sqlalchemy_hana==0.4.0"],
-        "dremio": ["sqlalchemy_dremio>=0.5.0dev0"],
+        "dremio": ["sqlalchemy_dremio>=1.1.0"],
+        "cockroachdb": ["cockroachdb==0.3.3"],
+        "thumbnails": ["Pillow>=7.0.0, <8.0.0"],
     },
     python_requires="~=3.6",
     author="Apache Software Foundation",
@@ -129,5 +134,5 @@ setup(
         "Programming Language :: Python :: 3.6",
         "Programming Language :: Python :: 3.7",
     ],
-    tests_require=["flask-testing==0.7.1"],
+    tests_require=["flask-testing==0.8.0"],
 )

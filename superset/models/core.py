@@ -63,6 +63,7 @@ custom_password_store = config["SQLALCHEMY_CUSTOM_PASSWORD_STORE"]
 stats_logger = config["STATS_LOGGER"]
 log_query = config["QUERY_LOGGER"]
 metadata = Model.metadata  # pylint: disable=no-member
+logger = logging.getLogger(__name__)
 
 PASSWORD_MASK = "X" * 10
 DB_CONNECTION_MUTATOR = config["DB_CONNECTION_MUTATOR"]
@@ -72,7 +73,7 @@ class Url(Model, AuditMixinNullable):
     """Used for the short url feature"""
 
     __tablename__ = "url"
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     url = Column(Text)
 
 
@@ -81,7 +82,7 @@ class KeyValue(Model):  # pylint: disable=too-few-public-methods
     """Used for any type of key-value store"""
 
     __tablename__ = "keyvalue"
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     value = Column(Text, nullable=False)
 
 
@@ -90,7 +91,7 @@ class CssTemplate(Model, AuditMixinNullable):
     """CSS templates for dashboards"""
 
     __tablename__ = "css_templates"
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     template_name = Column(String(250))
     css = Column(Text, default="")
 
@@ -105,7 +106,7 @@ class Database(
     type = "table"
     __table_args__ = (UniqueConstraint("database_name"),)
 
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     verbose_name = Column(String(250), unique=True)
     # short unique name, used in permissions
     database_name = Column(String(250), unique=True, nullable=False)
@@ -138,6 +139,7 @@ class Database(
     encrypted_extra = Column(EncryptedType(Text, config["SECRET_KEY"]), nullable=True)
     perm = Column(String(1000))
     impersonate_user = Column(Boolean, default=False)
+    server_cert = Column(EncryptedType(Text, config["SECRET_KEY"]), nullable=True)
     export_fields = [
         "database_name",
         "sqlalchemy_uri",
@@ -163,7 +165,13 @@ class Database(
 
     @property
     def function_names(self) -> List[str]:
-        return self.db_engine_spec.get_function_names(self)
+        try:
+            return self.db_engine_spec.get_function_names(self)
+        except Exception as ex:  # pylint: disable=broad-except
+            # function_names property is used in bulk APIs and should not hard crash
+            # more info in: https://github.com/apache/incubator-superset/issues/9678
+            logger.error(f"Failed to fetch database function names with error: {ex}")
+        return []
 
     @property
     def allows_cost_estimate(self) -> bool:
@@ -277,11 +285,11 @@ class Database(
         schema: Optional[str] = None,
         nullpool: bool = True,
         user_name: Optional[str] = None,
-        source: Optional[int] = None,
+        source: Optional[utils.QuerySource] = None,
     ) -> Engine:
         extra = self.get_extra()
         sqlalchemy_url = make_url(self.sqlalchemy_uri_decrypted)
-        sqlalchemy_url = self.db_engine_spec.adjust_database_uri(sqlalchemy_url, schema)
+        self.db_engine_spec.adjust_database_uri(sqlalchemy_url, schema)
         effective_username = self.get_effective_user(sqlalchemy_url, user_name)
         # If using MySQL or Presto for example, will set url.username
         # If using Hive, will not do anything yet since that relies on a
@@ -291,30 +299,41 @@ class Database(
         )
 
         masked_url = self.get_password_masked_url(sqlalchemy_url)
-        logging.info("Database.get_sqla_engine(). Masked URL: %s", str(masked_url))
+        logger.debug("Database.get_sqla_engine(). Masked URL: %s", str(masked_url))
 
         params = extra.get("engine_params", {})
         if nullpool:
             params["poolclass"] = NullPool
 
+        connect_args = params.get("connect_args", {})
+        configuration = connect_args.get("configuration", {})
+
         # If using Hive, this will set hive.server2.proxy.user=$effective_username
-        configuration: Dict[str, Any] = {}
         configuration.update(
             self.db_engine_spec.get_configuration_for_impersonation(
                 str(sqlalchemy_url), self.impersonate_user, effective_username
             )
         )
         if configuration:
-            d = params.get("connect_args", {})
-            d["configuration"] = configuration
-            params["connect_args"] = d
+            connect_args["configuration"] = configuration
+        if connect_args:
+            params["connect_args"] = connect_args
 
         params.update(self.get_encrypted_extra())
 
         if DB_CONNECTION_MUTATOR:
+            if not source and request and request.referrer:
+                if "/superset/dashboard/" in request.referrer:
+                    source = utils.QuerySource.DASHBOARD
+                elif "/superset/explore/" in request.referrer:
+                    source = utils.QuerySource.CHART
+                elif "/superset/sqllab/" in request.referrer:
+                    source = utils.QuerySource.SQL_LAB
+
             sqlalchemy_url, params = DB_CONNECTION_MUTATOR(
                 sqlalchemy_url, params, effective_username, security_manager, source
             )
+
         return create_engine(sqlalchemy_url, **params)
 
     def get_reserved_words(self) -> Set[str]:
@@ -327,15 +346,8 @@ class Database(
         self, sql: str, schema: Optional[str] = None, mutator: Optional[Callable] = None
     ) -> pd.DataFrame:
         sqls = [str(s).strip(" ;") for s in sqlparse.parse(sql)]
-        source_key = None
-        if request and request.referrer:
-            if "/superset/dashboard/" in request.referrer:
-                source_key = "dashboard"
-            elif "/superset/explore/" in request.referrer:
-                source_key = "chart"
-        engine = self.get_sqla_engine(
-            schema=schema, source=utils.sources[source_key] if source_key else None
-        )
+
+        engine = self.get_sqla_engine(schema=schema)
         username = utils.get_username()
 
         def needs_conversion(df_series: pd.Series) -> bool:
@@ -395,9 +407,7 @@ class Database(
         cols: Optional[List[Dict[str, Any]]] = None,
     ):
         """Generates a ``select *`` statement in the proper dialect"""
-        eng = self.get_sqla_engine(
-            schema=schema, source=utils.sources.get("sql_lab", None)
-        )
+        eng = self.get_sqla_engine(schema=schema, source=utils.QuerySource.SQL_LAB)
         return self.db_engine_spec.select_star(
             self,
             table_name,
@@ -426,7 +436,7 @@ class Database(
         attribute_in_key="id",
     )
     def get_all_table_names_in_database(
-        self, cache: bool = False, cache_timeout: bool = None, force=False
+        self, cache: bool = False, cache_timeout: Optional[bool] = None, force=False
     ) -> List[utils.DatasourceName]:
         """Parameters need to be passed as keyword arguments."""
         if not self.allow_multi_schema_metadata_fetch:
@@ -438,7 +448,10 @@ class Database(
         attribute_in_key="id",  # type: ignore
     )
     def get_all_view_names_in_database(
-        self, cache: bool = False, cache_timeout: bool = None, force: bool = False
+        self,
+        cache: bool = False,
+        cache_timeout: Optional[bool] = None,
+        force: bool = False,
     ) -> List[utils.DatasourceName]:
         """Parameters need to be passed as keyword arguments."""
         if not self.allow_multi_schema_metadata_fetch:
@@ -453,7 +466,7 @@ class Database(
         self,
         schema: str,
         cache: bool = False,
-        cache_timeout: int = None,
+        cache_timeout: Optional[int] = None,
         force: bool = False,
     ) -> List[utils.DatasourceName]:
         """Parameters need to be passed as keyword arguments.
@@ -474,8 +487,8 @@ class Database(
             return [
                 utils.DatasourceName(table=table, schema=schema) for table in tables
             ]
-        except Exception as e:  # pylint: disable=broad-except
-            logging.exception(e)
+        except Exception as ex:  # pylint: disable=broad-except
+            logger.exception(ex)
 
     @cache_util.memoized_func(
         key=lambda *args, **kwargs: f"db:{{}}:schema:{kwargs.get('schema')}:view_list",  # type: ignore
@@ -485,7 +498,7 @@ class Database(
         self,
         schema: str,
         cache: bool = False,
-        cache_timeout: int = None,
+        cache_timeout: Optional[int] = None,
         force: bool = False,
     ) -> List[utils.DatasourceName]:
         """Parameters need to be passed as keyword arguments.
@@ -504,14 +517,17 @@ class Database(
                 database=self, inspector=self.inspector, schema=schema
             )
             return [utils.DatasourceName(table=view, schema=schema) for view in views]
-        except Exception as e:  # pylint: disable=broad-except
-            logging.exception(e)
+        except Exception as ex:  # pylint: disable=broad-except
+            logger.exception(ex)
 
     @cache_util.memoized_func(
         key=lambda *args, **kwargs: "db:{}:schema_list", attribute_in_key="id"
     )
     def get_all_schema_names(
-        self, cache: bool = False, cache_timeout: int = None, force: bool = False
+        self,
+        cache: bool = False,
+        cache_timeout: Optional[int] = None,
+        force: bool = False,
     ) -> List[str]:
         """Parameters need to be passed as keyword arguments.
 
@@ -547,23 +563,16 @@ class Database(
         return self.db_engine_spec.get_time_grains()
 
     def get_extra(self) -> Dict[str, Any]:
-        extra: Dict[str, Any] = {}
-        if self.extra:
-            try:
-                extra = json.loads(self.extra)
-            except json.JSONDecodeError as e:
-                logging.error(e)
-                raise e
-        return extra
+        return self.db_engine_spec.get_extra_params(self)
 
     def get_encrypted_extra(self):
         encrypted_extra = {}
         if self.encrypted_extra:
             try:
                 encrypted_extra = json.loads(self.encrypted_extra)
-            except json.JSONDecodeError as e:
-                logging.error(e)
-                raise e
+            except json.JSONDecodeError as ex:
+                logger.error(ex)
+                raise ex
         return encrypted_extra
 
     def get_table(self, table_name: str, schema: Optional[str] = None) -> Table:
@@ -598,7 +607,7 @@ class Database(
         return self.inspector.get_foreign_keys(table_name, schema)
 
     def get_schema_access_for_csv_upload(  # pylint: disable=invalid-name
-        self
+        self,
     ) -> List[str]:
         return self.get_extra().get("schemas_allowed_for_csv_upload", [])
 
@@ -642,7 +651,7 @@ class Log(Model):  # pylint: disable=too-few-public-methods
 
     __tablename__ = "logs"
 
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     action = Column(String(512))
     user_id = Column(Integer, ForeignKey("ab_user.id"))
     dashboard_id = Column(Integer)
@@ -659,7 +668,7 @@ class Log(Model):  # pylint: disable=too-few-public-methods
 class FavStar(Model):  # pylint: disable=too-few-public-methods
     __tablename__ = "favstar"
 
-    id = Column(Integer, primary_key=True)  # pylint: disable=invalid-name
+    id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("ab_user.id"))
     class_name = Column(String(50))
     obj_id = Column(Integer)

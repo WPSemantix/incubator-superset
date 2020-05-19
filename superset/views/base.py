@@ -18,8 +18,9 @@ import functools
 import logging
 import traceback
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import dataclasses
 import simplejson as json
 import yaml
 from flask import abort, flash, g, get_flashed_messages, redirect, Response, session
@@ -27,6 +28,7 @@ from flask_appbuilder import BaseView, ModelView
 from flask_appbuilder.actions import action
 from flask_appbuilder.forms import DynamicForm
 from flask_appbuilder.models.sqla.filters import BaseFilter
+from flask_appbuilder.security.sqla.models import Role, User
 from flask_appbuilder.widgets import ListWidget
 from flask_babel import get_locale, gettext as __, lazy_gettext as _
 from flask_wtf.form import FlaskForm
@@ -34,10 +36,21 @@ from sqlalchemy import or_
 from werkzeug.exceptions import HTTPException
 from wtforms.fields.core import Field, UnboundField
 
-from superset import appbuilder, conf, db, get_feature_flags, security_manager
+from superset import (
+    app as superset_app,
+    appbuilder,
+    conf,
+    db,
+    get_feature_flags,
+    security_manager,
+)
+from superset.connectors.sqla import models
+from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.exceptions import SupersetException, SupersetSecurityException
 from superset.translations.utils import get_language_pack
 from superset.utils import core as utils
+
+from .utils import bootstrap_user_data
 
 FRONTEND_CONF_KEYS = (
     "SUPERSET_WEBSERVER_TIMEOUT",
@@ -49,9 +62,13 @@ FRONTEND_CONF_KEYS = (
     "SQLLAB_SAVE_WARNING_MESSAGE",
     "DISPLAY_MAX_ROW",
 )
+logger = logging.getLogger(__name__)
+
+logger = logging.getLogger(__name__)
+config = superset_app.config
 
 
-def get_error_msg():
+def get_error_msg() -> str:
     if conf.get("SHOW_STACKTRACE"):
         error_msg = traceback.format_exc()
     else:
@@ -63,12 +80,14 @@ def get_error_msg():
     return error_msg
 
 
-def json_error_response(msg=None, status=500, stacktrace=None, payload=None, link=None):
+def json_error_response(
+    msg: Optional[str] = None,
+    status: int = 500,
+    payload: Optional[Dict[str, Any]] = None,
+    link: Optional[str] = None,
+) -> Response:
     if not payload:
         payload = {"error": "{}".format(msg)}
-    if not stacktrace:
-        stacktrace = utils.get_stacktrace()
-    payload["stacktrace"] = stacktrace
     if link:
         payload["link"] = link
 
@@ -79,16 +98,34 @@ def json_error_response(msg=None, status=500, stacktrace=None, payload=None, lin
     )
 
 
-def json_success(json_msg, status=200):
+def json_errors_response(
+    errors: List[SupersetError],
+    status: int = 500,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Response:
+    if not payload:
+        payload = {}
+
+    payload["errors"] = [dataclasses.asdict(error) for error in errors]
+    return Response(
+        json.dumps(payload, default=utils.json_iso_dttm_ser, ignore_nan=True),
+        status=status,
+        mimetype="application/json",
+    )
+
+
+def json_success(json_msg: str, status: int = 200) -> Response:
     return Response(json_msg, status=status, mimetype="application/json")
 
 
-def data_payload_response(payload_json, has_error=False):
+def data_payload_response(payload_json: str, has_error: bool = False) -> Response:
     status = 400 if has_error else 200
     return json_success(payload_json, status=status)
 
 
-def generate_download_headers(extension, filename=None):
+def generate_download_headers(
+    extension: str, filename: Optional[str] = None
+) -> Dict[str, Any]:
     filename = filename if filename else datetime.now().strftime("%Y%m%d_%H%M%S")
     content_disp = f"attachment; filename={filename}.{extension}"
     headers = {"Content-Disposition": content_disp}
@@ -104,8 +141,8 @@ def api(f):
     def wraps(self, *args, **kwargs):
         try:
             return f(self, *args, **kwargs)
-        except Exception as e:  # pylint: disable=broad-except
-            logging.exception(e)
+        except Exception as ex:  # pylint: disable=broad-except
+            logger.exception(ex)
             return json_error_response(get_error_msg())
 
     return functools.update_wrapper(wraps, f)
@@ -121,42 +158,65 @@ def handle_api_exception(f):
     def wraps(self, *args, **kwargs):
         try:
             return f(self, *args, **kwargs)
-        except SupersetSecurityException as e:
-            logging.exception(e)
-            return json_error_response(
-                utils.error_msg_from_exception(e),
-                status=e.status,
-                stacktrace=utils.get_stacktrace(),
-                link=e.link,
+        except SupersetSecurityException as ex:
+            logger.exception(ex)
+            return json_errors_response(
+                errors=[ex.error], status=ex.status, payload=ex.payload
             )
-        except SupersetException as e:
-            logging.exception(e)
+        except SupersetException as ex:
+            logger.exception(ex)
             return json_error_response(
-                utils.error_msg_from_exception(e),
-                stacktrace=utils.get_stacktrace(),
-                status=e.status,
+                utils.error_msg_from_exception(ex), status=ex.status
             )
-        except HTTPException as e:
-            logging.exception(e)
+        except HTTPException as ex:
+            logger.exception(ex)
             return json_error_response(
-                utils.error_msg_from_exception(e),
-                stacktrace=traceback.format_exc(),
-                status=e.code,
+                utils.error_msg_from_exception(ex), status=ex.code
             )
-        except Exception as e:  # pylint: disable=broad-except
-            logging.exception(e)
-            return json_error_response(
-                utils.error_msg_from_exception(e), stacktrace=utils.get_stacktrace()
-            )
+        except Exception as ex:  # pylint: disable=broad-except
+            logger.exception(ex)
+            return json_error_response(utils.error_msg_from_exception(ex))
 
     return functools.update_wrapper(wraps, f)
 
 
-def get_datasource_exist_error_msg(full_name):
+def get_datasource_exist_error_msg(full_name: str) -> str:
     return __("Datasource %(name)s already exists", name=full_name)
 
 
-def get_user_roles():
+def validate_sqlatable(table: models.SqlaTable) -> None:
+    """Checks the table existence in the database."""
+    with db.session.no_autoflush:
+        table_query = db.session.query(models.SqlaTable).filter(
+            models.SqlaTable.table_name == table.table_name,
+            models.SqlaTable.schema == table.schema,
+            models.SqlaTable.database_id == table.database.id,
+        )
+        if db.session.query(table_query.exists()).scalar():
+            raise Exception(get_datasource_exist_error_msg(table.full_name))
+
+    # Fail before adding if the table can't be found
+    try:
+        table.get_sqla_table_object()
+    except Exception as ex:
+        logger.exception(f"Got an error in pre_add for {table.name}")
+        raise Exception(
+            _(
+                "Table [%{table}s] could not be found, "
+                "please double check your "
+                "database connection, schema, and "
+                "table name, error: {}"
+            ).format(table.name, str(ex))
+        )
+
+
+def create_table_permissions(table: models.SqlaTable) -> None:
+    security_manager.add_permission_view_menu("datasource_access", table.get_perm())
+    if table.schema:
+        security_manager.add_permission_view_menu("schema_access", table.schema_perm)
+
+
+def get_user_roles() -> List[Role]:
     if g.user.is_anonymous:
         public_role = conf.get("AUTH_ROLE_PUBLIC")
         return [security_manager.find_role(public_role)] if public_role else []
@@ -180,12 +240,12 @@ def menu_data():
     if not g.user.is_anonymous:
         try:
             logo_target_path = (
-                appbuilder.app.config.get("LOGO_TARGET_PATH")
+                appbuilder.app.config["LOGO_TARGET_PATH"]
                 or f"/profile/{g.user.username}/"
             )
         # when user object has no username
-        except NameError as e:
-            logging.exception(e)
+        except NameError as ex:
+            logger.exception(ex)
 
         if logo_target_path.startswith("/"):
             root_path = f"/superset{logo_target_path}"
@@ -204,12 +264,13 @@ def menu_data():
             "path": root_path,
             "icon": appbuilder.app_icon,
             "alt": appbuilder.app_name,
+            "width": appbuilder.app.config["APP_ICON_WIDTH"],
         },
         "navbar_right": {
-            "bug_report_url": appbuilder.app.config.get("BUG_REPORT_URL"),
-            "documentation_url": appbuilder.app.config.get("DOCUMENTATION_URL"),
-            "version_string": appbuilder.app.config.get("VERSION_STRING"),
-            "version_sha": appbuilder.app.config.get("VERSION_SHA"),
+            "bug_report_url": appbuilder.app.config["BUG_REPORT_URL"],
+            "documentation_url": appbuilder.app.config["DOCUMENTATION_URL"],
+            "version_string": appbuilder.app.config["VERSION_STRING"],
+            "version_sha": appbuilder.app.config["VERSION_SHA"],
             "languages": languages,
             "show_language_picker": len(languages.keys()) > 1,
             "user_is_anonymous": g.user.is_anonymous,
@@ -244,6 +305,19 @@ class SupersetModelView(ModelView):
     page_size = 100
     list_widget = SupersetListWidget
 
+    def render_app_template(self):
+        payload = {
+            "user": bootstrap_user_data(g.user),
+            "common": common_bootstrap_payload(),
+        }
+        return self.render_template(
+            "superset/welcome.html",
+            entry="welcome",
+            bootstrap_data=json.dumps(
+                payload, default=utils.pessimistic_json_iso_dttm_ser
+            ),
+        )
+
 
 class ListWidgetWithCheckboxes(ListWidget):  # pylint: disable=too-few-public-methods
     """An alternative to list view that renders Boolean fields as checkboxes
@@ -256,8 +330,8 @@ class ListWidgetWithCheckboxes(ListWidget):  # pylint: disable=too-few-public-me
 def validate_json(_form, field):
     try:
         json.loads(field.data)
-    except Exception as e:
-        logging.exception(e)
+    except Exception as ex:
+        logger.exception(ex)
         raise Exception(_("json isn't valid"))
 
 
@@ -298,8 +372,8 @@ class DeleteMixin:  # pylint: disable=too-few-public-methods
             abort(404)
         try:
             self.pre_delete(item)
-        except Exception as e:  # pylint: disable=broad-except
-            flash(str(e), "danger")
+        except Exception as ex:  # pylint: disable=broad-except
+            flash(str(ex), "danger")
         else:
             view_menu = security_manager.find_view_menu(item.get_perm())
             pvs = (
@@ -333,8 +407,8 @@ class DeleteMixin:  # pylint: disable=too-few-public-methods
         for item in items:
             try:
                 self.pre_delete(item)
-            except Exception as e:  # pylint: disable=broad-except
-                flash(str(e), "danger")
+            except Exception as ex:  # pylint: disable=broad-except
+                flash(str(ex), "danger")
             else:
                 self._delete(item.id)
         self.update_redirect()
@@ -363,7 +437,7 @@ class CsvResponse(Response):  # pylint: disable=too-many-ancestors
     charset = conf["CSV_EXPORT"].get("encoding", "utf-8")
 
 
-def check_ownership(obj, raise_if_false=True):
+def check_ownership(obj: Any, raise_if_false: bool = True) -> bool:
     """Meant to be used in `pre_update` hooks on models to enforce ownership
 
     Admin have all access, and other users need to be referenced on either
@@ -376,7 +450,11 @@ def check_ownership(obj, raise_if_false=True):
         return False
 
     security_exception = SupersetSecurityException(
-        "You don't have the rights to alter [{}]".format(obj)
+        SupersetError(
+            error_type=SupersetErrorType.MISSING_OWNERSHIP_ERROR,
+            message="You don't have the rights to alter [{}]".format(obj),
+            level=ErrorLevel.ERROR,
+        )
     )
 
     if g.user.is_anonymous:
@@ -390,7 +468,7 @@ def check_ownership(obj, raise_if_false=True):
     orig_obj = scoped_session.query(obj.__class__).filter_by(id=obj.id).first()
 
     # Making a list of owners that works across ORM models
-    owners = []
+    owners: List[User] = []
     if hasattr(orig_obj, "owners"):
         owners += orig_obj.owners
     if hasattr(orig_obj, "owner"):

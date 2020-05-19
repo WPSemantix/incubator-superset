@@ -31,6 +31,9 @@ import shlex
 import sys
 
 import sphinx_rtd_theme
+from pandas._typing import ArrayLike  # Somehow required for type-checking.
+
+from superset import security_manager  # Somehow required for type-checking.
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -63,7 +66,7 @@ master_doc = "index"
 
 # General information about the project.
 project = "Apache Superset"
-copyright = "Copyright © 2019 The Apache Software Foundation, Licensed under the Apache License, Version 2.0."
+copyright = "Copyright © 2020 The Apache Software Foundation, Licensed under the Apache License, Version 2.0."
 author = u"Apache Superset Dev"
 
 # The version info for the project you're documenting, acts as replacement for
@@ -304,3 +307,7 @@ texinfo_documents = [
 
 # If true, do not generate a @detailmenu in the "Top" node's menu.
 # texinfo_no_detailmenu = False
+
+# -- Options for sphinx-autodoc-typehints -------------------------------------
+
+set_type_checking_flag = True

@@ -45,6 +45,8 @@ from superset.views.base import (
 
 from . import models
 
+logger = logging.getLogger(__name__)
+
 
 class DruidColumnInlineView(CompactCRUDMixin, SupersetModelView):
     datamodel = SQLAInterface(models.DruidColumn)
@@ -110,8 +112,8 @@ class DruidColumnInlineView(CompactCRUDMixin, SupersetModelView):
         if col.dimension_spec_json:
             try:
                 dimension_spec = json.loads(col.dimension_spec_json)
-            except ValueError as e:
-                raise ValueError("Invalid Dimension Spec JSON: " + str(e))
+            except ValueError as ex:
+                raise ValueError("Invalid Dimension Spec JSON: " + str(ex))
             if not isinstance(dimension_spec, dict):
                 raise ValueError("Dimension Spec must be a JSON object")
             if "outputName" not in dimension_spec:
@@ -372,15 +374,15 @@ class Druid(BaseSupersetView):
             valid_cluster = True
             try:
                 cluster.refresh_datasources(refresh_all=refresh_all)
-            except Exception as e:
+            except Exception as ex:
                 valid_cluster = False
                 flash(
                     "Error while processing cluster '{}'\n{}".format(
-                        cluster_name, utils.error_msg_from_exception(e)
+                        cluster_name, utils.error_msg_from_exception(ex)
                     ),
                     "danger",
                 )
-                logging.exception(e)
+                logger.exception(ex)
                 pass
             if valid_cluster:
                 cluster.metadata_last_refreshed = datetime.now()
