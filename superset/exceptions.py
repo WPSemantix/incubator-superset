@@ -32,7 +32,7 @@ class SupersetException(Exception):
         super().__init__(self.message)
 
     @property
-    def exception(self):
+    def exception(self) -> Optional[Exception]:
         return self._exception
 
 
@@ -77,3 +77,7 @@ class DatabaseNotFound(SupersetException):
 
 class QueryObjectValidationError(SupersetException):
     status = 400
+
+
+class DashboardImportException(SupersetException):
+    pass

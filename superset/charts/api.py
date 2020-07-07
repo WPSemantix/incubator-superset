@@ -14,6 +14,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import json
 import logging
 from typing import Any, Dict
 
@@ -22,6 +23,7 @@ from flask import g, make_response, redirect, request, Response, url_for
 from flask_appbuilder.api import expose, protect, rison, safe
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_babel import gettext as _, ngettext
+from marshmallow import ValidationError
 from werkzeug.wrappers import Response as WerkzeugResponse
 from werkzeug.wsgi import FileWrapper
 
@@ -48,20 +50,23 @@ from superset.charts.schemas import (
     ChartPutSchema,
     get_delete_ids_schema,
     openapi_spec_methods_override,
+    screenshot_query_schema,
     thumbnail_query_schema,
 )
 from superset.constants import RouteMethod
 from superset.exceptions import SupersetSecurityException
-from superset.extensions import event_logger, security_manager
+from superset.extensions import event_logger
 from superset.models.slice import Slice
 from superset.tasks.thumbnails import cache_chart_thumbnail
-from superset.utils.core import json_int_dttm_ser
+from superset.utils.core import ChartDataResultFormat, json_int_dttm_ser
 from superset.utils.screenshots import ChartScreenshot
+from superset.utils.urls import get_url_path
 from superset.views.base_api import (
     BaseSupersetModelRestApi,
     RelatedFieldFilter,
     statsd_metrics,
 )
+from superset.views.core import CsvResponse, generate_download_headers
 from superset.views.filters import FilterRelatedOwners
 
 logger = logging.getLogger(__name__)
@@ -95,6 +100,8 @@ class ChartRestApi(BaseSupersetModelRestApi):
         "params",
         "cache_timeout",
     ]
+    show_select_columns = show_columns + ["table.id"]
+
     list_columns = [
         "id",
         "slice_name",
@@ -117,6 +124,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
         "params",
         "cache_timeout",
     ]
+
     order_columns = [
         "slice_name",
         "viz_type",
@@ -164,7 +172,11 @@ class ChartRestApi(BaseSupersetModelRestApi):
 
     def __init__(self) -> None:
         if is_feature_enabled("THUMBNAILS"):
-            self.include_route_methods = self.include_route_methods | {"thumbnail"}
+            self.include_route_methods = self.include_route_methods | {
+                "thumbnail",
+                "screenshot",
+                "cache_screenshot",
+            }
         super().__init__()
 
     @expose("/", methods=["POST"])
@@ -207,17 +219,20 @@ class ChartRestApi(BaseSupersetModelRestApi):
         """
         if not request.is_json:
             return self.response_400(message="Request is not JSON")
-        item = self.add_model_schema.load(request.json)
-        # This validates custom Schema with custom validations
-        if item.errors:
-            return self.response_400(message=item.errors)
         try:
-            new_model = CreateChartCommand(g.user, item.data).run()
-            return self.response(201, id=new_model.id, result=item.data)
+            item = self.add_model_schema.load(request.json)
+        # This validates custom Schema with custom validations
+        except ValidationError as error:
+            return self.response_400(message=error.messages)
+        try:
+            new_model = CreateChartCommand(g.user, item).run()
+            return self.response(201, id=new_model.id, result=item)
         except ChartInvalidError as ex:
             return self.response_422(message=ex.normalized_messages())
         except ChartCreateFailedError as ex:
-            logger.error(f"Error creating model {self.__class__.__name__}: {ex}")
+            logger.error(
+                "Error creating model %s: %s", self.__class__.__name__, str(ex)
+            )
             return self.response_422(message=str(ex))
 
     @expose("/<pk>", methods=["PUT"])
@@ -271,13 +286,14 @@ class ChartRestApi(BaseSupersetModelRestApi):
         """
         if not request.is_json:
             return self.response_400(message="Request is not JSON")
-        item = self.edit_model_schema.load(request.json)
-        # This validates custom Schema with custom validations
-        if item.errors:
-            return self.response_400(message=item.errors)
         try:
-            changed_model = UpdateChartCommand(g.user, pk, item.data).run()
-            return self.response(200, id=changed_model.id, result=item.data)
+            item = self.edit_model_schema.load(request.json)
+        # This validates custom Schema with custom validations
+        except ValidationError as error:
+            return self.response_400(message=error.messages)
+        try:
+            changed_model = UpdateChartCommand(g.user, pk, item).run()
+            return self.response(200, id=changed_model.id, result=item)
         except ChartNotFoundError:
             return self.response_404()
         except ChartForbiddenError:
@@ -285,7 +301,9 @@ class ChartRestApi(BaseSupersetModelRestApi):
         except ChartInvalidError as ex:
             return self.response_422(message=ex.normalized_messages())
         except ChartUpdateFailedError as ex:
-            logger.error(f"Error updating model {self.__class__.__name__}: {ex}")
+            logger.error(
+                "Error updating model %s: %s", self.__class__.__name__, str(ex)
+            )
             return self.response_422(message=str(ex))
 
     @expose("/<pk>", methods=["DELETE"])
@@ -332,7 +350,9 @@ class ChartRestApi(BaseSupersetModelRestApi):
         except ChartForbiddenError:
             return self.response_403()
         except ChartDeleteFailedError as ex:
-            logger.error(f"Error deleting model {self.__class__.__name__}: {ex}")
+            logger.error(
+                "Error deleting model %s: %s", self.__class__.__name__, str(ex)
+            )
             return self.response_422(message=str(ex))
 
     @expose("/", methods=["DELETE"])
@@ -384,9 +404,7 @@ class ChartRestApi(BaseSupersetModelRestApi):
             return self.response(
                 200,
                 message=ngettext(
-                    f"Deleted %(num)d chart",
-                    f"Deleted %(num)d charts",
-                    num=len(item_ids),
+                    "Deleted %(num)d chart", "Deleted %(num)d charts", num=len(item_ids)
                 ),
             )
         except ChartNotFoundError:
@@ -430,28 +448,179 @@ class ChartRestApi(BaseSupersetModelRestApi):
               $ref: '#/components/responses/400'
             500:
               $ref: '#/components/responses/500'
-            """
-        if not request.is_json:
+        """
+        if request.is_json:
+            json_body = request.json
+        elif request.form.get("form_data"):
+            # CSV export submits regular form data
+            json_body = json.loads(request.form["form_data"])
+        else:
             return self.response_400(message="Request is not JSON")
         try:
-            query_context, errors = ChartDataQueryContextSchema().load(request.json)
-            if errors:
-                return self.response_400(
-                    message=_("Request is incorrect: %(error)s", error=errors)
-                )
+            query_context = ChartDataQueryContextSchema().load(json_body)
         except KeyError:
             return self.response_400(message="Request is incorrect")
+        except ValidationError as error:
+            return self.response_400(
+                _("Request is incorrect: %(error)s", error=error.messages)
+            )
         try:
-            security_manager.assert_query_context_permission(query_context)
+            query_context.raise_for_access()
         except SupersetSecurityException:
             return self.response_401()
-        payload_json = query_context.get_payload()
-        response_data = simplejson.dumps(
-            {"result": payload_json}, default=json_int_dttm_ser, ignore_nan=True
+        payload = query_context.get_payload()
+        result_format = query_context.result_format
+        if result_format == ChartDataResultFormat.CSV:
+            # return the first result
+            result = payload[0]["data"]
+            return CsvResponse(
+                result,
+                status=200,
+                headers=generate_download_headers("csv"),
+                mimetype="application/csv",
+            )
+
+        if result_format == ChartDataResultFormat.JSON:
+            response_data = simplejson.dumps(
+                {"result": payload}, default=json_int_dttm_ser, ignore_nan=True
+            )
+            resp = make_response(response_data, 200)
+            resp.headers["Content-Type"] = "application/json; charset=utf-8"
+            return resp
+
+        raise self.response_400(message=f"Unsupported result_format: {result_format}")
+
+    @expose("/<pk>/cache_screenshot/", methods=["GET"])
+    @protect()
+    @rison(screenshot_query_schema)
+    @safe
+    @statsd_metrics
+    def cache_screenshot(self, pk: int, **kwargs: Dict[str, bool]) -> WerkzeugResponse:
+        """Get Chart screenshot
+        ---
+        get:
+          description: Compute or get already computed screenshot from cache.
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          - in: path
+            schema:
+              type: string
+            name: sha
+          responses:
+            200:
+              description: Chart thumbnail image
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      cache_key:
+                        type: string
+                      chart_url:
+                        type: string
+                      image_url:
+                        type: string
+            302:
+              description: Redirects to the current digest
+            400:
+              $ref: '#/components/responses/400'
+            401:
+              $ref: '#/components/responses/401'
+            404:
+              $ref: '#/components/responses/404'
+            500:
+              $ref: '#/components/responses/500'
+        """
+        rison_dict = kwargs["rison"]
+        window_size = rison_dict.get("window_size") or (800, 600)
+
+        # Don't shrink the image if thumb_size is not specified
+        thumb_size = rison_dict.get("thumb_size") or window_size
+
+        chart = self.datamodel.get(pk, self._base_filters)
+        if not chart:
+            return self.response_404()
+
+        chart_url = get_url_path("Superset.slice", slice_id=chart.id, standalone="true")
+        screenshot_obj = ChartScreenshot(chart_url, chart.digest)
+        cache_key = screenshot_obj.cache_key(window_size, thumb_size)
+        image_url = get_url_path(
+            "ChartRestApi.screenshot", pk=chart.id, digest=cache_key
         )
-        resp = make_response(response_data, 200)
-        resp.headers["Content-Type"] = "application/json; charset=utf-8"
-        return resp
+
+        def trigger_celery() -> WerkzeugResponse:
+            logger.info("Triggering screenshot ASYNC")
+            kwargs = {
+                "url": chart_url,
+                "digest": chart.digest,
+                "force": True,
+                "window_size": window_size,
+                "thumb_size": thumb_size,
+            }
+            cache_chart_thumbnail.delay(**kwargs)
+            return self.response(
+                202, cache_key=cache_key, chart_url=chart_url, image_url=image_url,
+            )
+
+        return trigger_celery()
+
+    @expose("/<pk>/screenshot/<digest>/", methods=["GET"])
+    @protect()
+    @rison(screenshot_query_schema)
+    @safe
+    @statsd_metrics
+    def screenshot(self, pk: int, digest: str) -> WerkzeugResponse:
+        """Get Chart screenshot
+        ---
+        get:
+          description: Get a computed screenshot from cache.
+          parameters:
+          - in: path
+            schema:
+              type: integer
+            name: pk
+          - in: path
+            schema:
+              type: string
+            name: digest
+          responses:
+            200:
+              description: Chart thumbnail image
+              content:
+               image/*:
+                 schema:
+                   type: string
+                   format: binary
+            302:
+              description: Redirects to the current digest
+            400:
+              $ref: '#/components/responses/400'
+            401:
+              $ref: '#/components/responses/401'
+            404:
+              $ref: '#/components/responses/404'
+            500:
+              $ref: '#/components/responses/500'
+        """
+        chart = self.datamodel.get(pk, self._base_filters)
+
+        # Making sure the chart still exists
+        if not chart:
+            return self.response_404()
+
+        # TODO make sure the user has access to the chart
+
+        # fetch the chart screenshot using the current user and cache if set
+        img = ChartScreenshot.get_from_cache_key(thumbnail_cache, digest)
+        if img:
+            return Response(
+                FileWrapper(img), mimetype="image/png", direct_passthrough=True
+            )
+        # TODO: return an empty image
+        return self.response_404()
 
     @expose("/<pk>/thumbnail/<digest>/", methods=["GET"])
     @protect()
@@ -473,11 +642,11 @@ class ChartRestApi(BaseSupersetModelRestApi):
           - in: path
             schema:
               type: string
-            name: sha
+            name: digest
           responses:
             200:
               description: Chart thumbnail image
-              content:
+              /content:
                image/*:
                  schema:
                    type: string
@@ -496,14 +665,24 @@ class ChartRestApi(BaseSupersetModelRestApi):
         chart = self.datamodel.get(pk, self._base_filters)
         if not chart:
             return self.response_404()
+
+        url = get_url_path("Superset.slice", slice_id=chart.id, standalone="true")
         if kwargs["rison"].get("force", False):
-            cache_chart_thumbnail.delay(chart.id, force=True)
+            logger.info(
+                "Triggering thumbnail compute (chart id: %s) ASYNC", str(chart.id)
+            )
+            cache_chart_thumbnail.delay(url, chart.digest, force=True)
             return self.response(202, message="OK Async")
         # fetch the chart screenshot using the current user and cache if set
-        screenshot = ChartScreenshot(pk).get_from_cache(cache=thumbnail_cache)
+        screenshot = ChartScreenshot(url, chart.digest).get_from_cache(
+            cache=thumbnail_cache
+        )
         # If not screenshot then send request to compute thumb to celery
         if not screenshot:
-            cache_chart_thumbnail.delay(chart.id, force=True)
+            logger.info(
+                "Triggering thumbnail compute (chart id: %s) ASYNC", str(chart.id)
+            )
+            cache_chart_thumbnail.delay(url, chart.digest, force=True)
             return self.response(202, message="OK Async")
         # If digests
         if chart.digest != digest:

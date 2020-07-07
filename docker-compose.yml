@@ -18,8 +18,7 @@ x-superset-build: &superset-build
   args:
     NPM_BUILD_CMD: build-dev
   context: ./
-  dockerfile: Dockerfile
-  target: dev
+  dockerfile: Dockerfile-dev
 x-superset-depends-on: &superset-depends-on
   - db
   - redis
@@ -29,7 +28,6 @@ x-superset-volumes: &superset-volumes
   - ./docker/pythonpath_dev:/app/pythonpath
   - ./superset:/app/superset
   - ./superset-frontend:/app/superset-frontend
-  - node_modules:/app/superset-frontend/node_modules
   - superset_home:/app/superset_home
 
 version: "3.7"
@@ -101,14 +99,11 @@ services:
       REDIS_RESULTS_DB: 3
       REDIS_HOST: localhost
     network_mode: host
-    restart: unless-stopped
     depends_on: *superset-depends-on
     volumes: *superset-volumes
 
 volumes:
   superset_home:
-    external: false
-  node_modules:
     external: false
   db_home:
     external: false

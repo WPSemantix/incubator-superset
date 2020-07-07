@@ -55,8 +55,6 @@ describe('Test explore links', () => {
     // explicitly wait for the url response
     cy.wait('@getShortUrl');
 
-    cy.wait(100);
-
     cy.get('#shorturl-popover [data-test="short-url"]')
       .invoke('text')
       .then(text => {
@@ -105,7 +103,7 @@ describe('Test explore links', () => {
     cy.verifySliceSuccess({ waitAlias: '@postJson' });
 
     cy.get('[data-test=groupby]').within(() => {
-      cy.get('span.select-clear-zone').click();
+      cy.get('.Select__clear-indicator').click();
     });
     cy.get('button[data-target="#save_modal"]').click();
     cy.get('.modal-content').within(() => {
@@ -149,11 +147,11 @@ describe('Test explore links', () => {
     cy.get('.modal-content').within(() => {
       cy.get('input[name=new_slice_name]').type(chartName);
       cy.get('input[data-test=add-to-existing-dashboard]').check();
-      cy.get('.select.save-modal-selector')
+      cy.get('.save-modal-selector')
         .click()
         .within(() => {
-          cy.get('input').type(dashboardTitle, { force: true });
-          cy.get('.select-option.is-focused').trigger('mousedown');
+          cy.get('input').type(dashboardTitle);
+          cy.get('.Select__option--is-focused').trigger('mousedown');
         });
       cy.get('button#btn_modal_save').click();
     });

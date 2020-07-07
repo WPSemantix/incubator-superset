@@ -135,9 +135,9 @@ if (!isDevMode) {
   plugins.push(new OptimizeCSSAssetsPlugin());
 }
 
-const PREAMBLE = [path.join(APP_DIR, '/src/preamble.js')];
+const PREAMBLE = [path.join(APP_DIR, '/src/preamble.ts')];
 if (isDevMode) {
-  // A Superset webpage normally includes two JS bundles in dev, `theme.js` and
+  // A Superset webpage normally includes two JS bundles in dev, `theme.ts` and
   // the main entrypoint. Only the main entry should have the dev server client,
   // otherwise the websocket client will initialize twice, creating two sockets.
   // Ref: https://github.com/gaearon/react-hot-loader/issues/141
@@ -175,9 +175,9 @@ const config = {
     fs: 'empty',
   },
   entry: {
-    theme: path.join(APP_DIR, '/src/theme.js'),
+    theme: path.join(APP_DIR, '/src/theme.ts'),
     preamble: PREAMBLE,
-    addSlice: addPreamble('/src/addSlice/index.jsx'),
+    addSlice: addPreamble('/src/addSlice/index.tsx'),
     explore: addPreamble('/src/explore/index.jsx'),
     dashboard: addPreamble('/src/dashboard/index.jsx'),
     sqllab: addPreamble('/src/SqlLab/index.jsx'),
@@ -194,6 +194,7 @@ const config = {
     },
   },
   optimization: {
+    sideEffects: true,
     splitChunks: {
       chunks: 'all',
       automaticNameDelimiter: '-',
@@ -212,6 +213,7 @@ const config = {
       src: path.resolve(APP_DIR, './src'),
       'react-dom': '@hot-loader/react-dom',
       stylesheets: path.resolve(APP_DIR, './stylesheets'),
+      images: path.resolve(APP_DIR, './images'),
     },
     extensions: ['.ts', '.tsx', '.js', '.jsx'],
     symlinks: false,
@@ -298,6 +300,13 @@ const config = {
           limit: 10000,
           name: '[name].[hash:8].[ext]',
         },
+      },
+      {
+        test: /\.svg(\?v=\d+\.\d+\.\d+)?$/,
+        issuer: {
+          test: /\.(j|t)sx?$/,
+        },
+        use: ['@svgr/webpack'],
       },
       {
         test: /\.(jpg|gif)$/,

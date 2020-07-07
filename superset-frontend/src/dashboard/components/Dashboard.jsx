@@ -91,11 +91,15 @@ class Dashboard extends React.PureComponent {
   }
 
   componentDidMount() {
+    const appContainer = document.getElementById('app');
+    const bootstrapData = appContainer?.getAttribute('data-bootstrap') || '';
     const { dashboardState, layout } = this.props;
     const eventData = {
       is_edit_mode: dashboardState.editMode,
       mount_duration: Logger.getTimestamp(),
       is_empty: isDashboardEmpty(layout),
+      is_published: dashboardState.isPublished,
+      bootstrap_data_length: bootstrapData.length,
     };
     const directLinkComponentId = getLocationHash();
     if (directLinkComponentId) {
@@ -145,31 +149,7 @@ class Dashboard extends React.PureComponent {
     const { activeFilters } = this.props;
     // do not apply filter when dashboard in edit mode
     if (!editMode && !areObjectsEqual(appliedFilters, activeFilters)) {
-      // refresh charts if a filter was removed, added, or changed
-      const currFilterKeys = Object.keys(activeFilters);
-      const appliedFilterKeys = Object.keys(appliedFilters);
-
-      const allKeys = new Set(currFilterKeys.concat(appliedFilterKeys));
-      const affectedChartIds = [];
-      [...allKeys].forEach(filterKey => {
-        if (!currFilterKeys.includes(filterKey)) {
-          // removed filter?
-          [].push.apply(affectedChartIds, appliedFilters[filterKey].scope);
-        } else if (!appliedFilterKeys.includes(filterKey)) {
-          // added filter?
-          [].push.apply(affectedChartIds, activeFilters[filterKey].scope);
-        } else {
-          // changed filter field value or scope?
-          const affectedScope = (activeFilters[filterKey].scope || []).concat(
-            appliedFilters[filterKey].scope || [],
-          );
-          [].push.apply(affectedChartIds, affectedScope);
-        }
-      });
-
-      const idSet = new Set(affectedChartIds);
-      this.refreshCharts([...idSet]);
-      this.appliedFilters = activeFilters;
+      this.applyFilters();
     }
 
     if (hasUnsavedChanges) {
@@ -203,6 +183,56 @@ class Dashboard extends React.PureComponent {
   // return charts in array
   getAllCharts() {
     return Object.values(this.props.charts);
+  }
+
+  applyFilters() {
+    const appliedFilters = this.appliedFilters;
+    const { activeFilters } = this.props;
+
+    // refresh charts if a filter was removed, added, or changed
+    const currFilterKeys = Object.keys(activeFilters);
+    const appliedFilterKeys = Object.keys(appliedFilters);
+
+    const allKeys = new Set(currFilterKeys.concat(appliedFilterKeys));
+    const affectedChartIds = [];
+    [...allKeys].forEach(filterKey => {
+      if (!currFilterKeys.includes(filterKey)) {
+        // filterKey is removed?
+        affectedChartIds.push(...appliedFilters[filterKey].scope);
+      } else if (!appliedFilterKeys.includes(filterKey)) {
+        // filterKey is newly added?
+        affectedChartIds.push(...activeFilters[filterKey].scope);
+      } else {
+        // if filterKey changes value,
+        // update charts in its scope
+        if (
+          !areObjectsEqual(
+            appliedFilters[filterKey].values,
+            activeFilters[filterKey].values,
+          )
+        ) {
+          affectedChartIds.push(...activeFilters[filterKey].scope);
+        }
+
+        // if filterKey changes scope,
+        // update all charts in its scope
+        if (
+          !areObjectsEqual(
+            appliedFilters[filterKey].scope,
+            activeFilters[filterKey].scope,
+          )
+        ) {
+          const chartsInScope = (activeFilters[filterKey].scope || []).concat(
+            appliedFilters[filterKey].scope || [],
+          );
+          affectedChartIds.push(...chartsInScope);
+        }
+      }
+    });
+
+    // remove dup in affectedChartIds
+    this.refreshCharts([...new Set(affectedChartIds)]);
+    this.appliedFilters = activeFilters;
   }
 
   refreshCharts(ids) {

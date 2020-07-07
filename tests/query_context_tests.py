@@ -19,12 +19,16 @@ from superset import db
 from superset.charts.schemas import ChartDataQueryContextSchema
 from superset.common.query_context import QueryContext
 from superset.connectors.connector_registry import ConnectorRegistry
-from superset.utils.core import TimeRangeEndpoint
+from superset.utils.core import (
+    ChartDataResultFormat,
+    ChartDataResultType,
+    TimeRangeEndpoint,
+)
 from tests.base_tests import SupersetTestCase
 from tests.fixtures.query_context import get_query_context
 
 
-class QueryContextTests(SupersetTestCase):
+class TestQueryContext(SupersetTestCase):
     def test_schema_deserialization(self):
         """
         Ensure that the deserialized QueryContext contains all required fields.
@@ -35,8 +39,7 @@ class QueryContextTests(SupersetTestCase):
         payload = get_query_context(
             table.name, table.id, table.type, add_postprocessing_operations=True
         )
-        query_context, errors = ChartDataQueryContextSchema().load(payload)
-        self.assertDictEqual(errors, {})
+        query_context = ChartDataQueryContextSchema().load(payload)
         self.assertEqual(len(query_context.queries), len(payload["queries"]))
         for query_idx, query in enumerate(query_context.queries):
             payload_query = payload["queries"][query_idx]
@@ -111,7 +114,7 @@ class QueryContextTests(SupersetTestCase):
         extras = query_object.to_dict()["extras"]
         self.assertTrue("time_range_endpoints" in extras)
 
-        self.assertEquals(
+        self.assertEqual(
             extras["time_range_endpoints"],
             (TimeRangeEndpoint.INCLUSIVE, TimeRangeEndpoint.EXCLUSIVE),
         )
@@ -131,3 +134,55 @@ class QueryContextTests(SupersetTestCase):
         query_object = query_context.queries[0]
         self.assertEqual(query_object.granularity, "timecol")
         self.assertIn("having_druid", query_object.extras)
+
+    def test_csv_response_format(self):
+        """
+        Ensure that CSV result format works
+        """
+        self.login(username="admin")
+        table_name = "birth_names"
+        table = self.get_table_by_name(table_name)
+        payload = get_query_context(table.name, table.id, table.type)
+        payload["result_format"] = ChartDataResultFormat.CSV.value
+        payload["queries"][0]["row_limit"] = 10
+        query_context = QueryContext(**payload)
+        responses = query_context.get_payload()
+        self.assertEqual(len(responses), 1)
+        data = responses[0]["data"]
+        self.assertIn("name,sum__num\n", data)
+        self.assertEqual(len(data.split("\n")), 12)
+
+    def test_samples_response_type(self):
+        """
+        Ensure that samples result type works
+        """
+        self.login(username="admin")
+        table_name = "birth_names"
+        table = self.get_table_by_name(table_name)
+        payload = get_query_context(table.name, table.id, table.type)
+        payload["result_type"] = ChartDataResultType.SAMPLES.value
+        payload["queries"][0]["row_limit"] = 5
+        query_context = QueryContext(**payload)
+        responses = query_context.get_payload()
+        self.assertEqual(len(responses), 1)
+        data = responses[0]["data"]
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 5)
+        self.assertNotIn("sum__num", data[0])
+
+    def test_query_response_type(self):
+        """
+        Ensure that query result type works
+        """
+        self.login(username="admin")
+        table_name = "birth_names"
+        table = self.get_table_by_name(table_name)
+        payload = get_query_context(table.name, table.id, table.type)
+        payload["result_type"] = ChartDataResultType.QUERY.value
+        query_context = QueryContext(**payload)
+        responses = query_context.get_payload()
+        self.assertEqual(len(responses), 1)
+        response = responses[0]
+        self.assertEqual(len(response), 2)
+        self.assertEqual(response["language"], "sql")
+        self.assertIn("SELECT", response["query"])

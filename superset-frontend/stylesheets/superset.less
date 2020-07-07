@@ -153,12 +153,6 @@ div.navbar {
   }
 }
 
-img.loading {
-  width: 40px;
-  position: relative;
-  margin: 10px;
-}
-
 img.viz-thumb-option {
   width: 100px;
   border: 1px solid @gray;
@@ -356,10 +350,6 @@ table.table-no-hover tr:hover {
   padding-right: 2;
 }
 
-.Select-menu-outer {
-  z-index: @z-index-dropdown !important;
-}
-
 /** not found record **/
 .panel b {
   display: inline-block;
@@ -449,7 +439,7 @@ table.table-no-hover tr:hover {
 }
 
 .list-add-action .btn.btn-sm {
-  padding: 5px 6px;
+  padding: 6px 6px;
   font-size: @font-size-xs;
   line-height: 2px;
   border-radius: 50%;
@@ -531,27 +521,6 @@ tr.reactable-column-header th.reactable-header-sortable {
   padding-right: 17px;
 }
 
-.explore-chart-overlay {
-  position: absolute;
-  z-index: @z-index-above-dashboard-charts;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-}
-
-.refresh-overlay-btn {
-  font-weight: @font-weight-bold;
-  margin-right: 10px;
-}
-
-.dismiss-overlay-btn {
-  font-weight: @font-weight-bold;
-  background: @lightest;
-  color: @brand-primary;
-  border-color: @brand-primary;
-}
-
 .fave-unfave-icon {
   .fa-star-o,
   .fa-star {
@@ -579,4 +548,7 @@ td.filtered {
 
 .table-name {
   font-size: @font-size-l;
+}
+.select2-container-multi {
+  width: 100% !important;
 }
