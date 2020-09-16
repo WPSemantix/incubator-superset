@@ -65,12 +65,10 @@ describe('ExploreResultsButton', () => {
   };
   const mockChartTypeBarChart = {
     label: 'Distribution - Bar Chart',
-    requiresTime: false,
     value: 'dist_bar',
   };
   const mockChartTypeTB = {
     label: 'Time Series - Bar Chart',
-    requiresTime: true,
     value: 'bar',
   };
   const getExploreResultsButtonWrapper = (props = mockedProps) =>
@@ -96,13 +94,7 @@ describe('ExploreResultsButton', () => {
     });
 
     const badCols = wrapper.instance().getInvalidColumns();
-    expect(badCols).toEqual([
-      'COUNT(*)',
-      '1',
-      '123',
-      'CASE WHEN 1=1 THEN 1 ELSE 0 END',
-      '__TIMESTAMP',
-    ]);
+    expect(badCols).toEqual(['my_dupe_col__2', '__timestamp', '__TIMESTAMP']);
 
     const msgWrapper = shallow(wrapper.instance().renderInvalidColumnMessage());
     expect(msgWrapper.find('div')).toHaveLength(1);
@@ -110,7 +102,7 @@ describe('ExploreResultsButton', () => {
 
   it('renders a Button', () => {
     const wrapper = getExploreResultsButtonWrapper();
-    expect(wrapper.find(Button)).toHaveLength(1);
+    expect(wrapper.find(Button)).toExist();
   });
 
   describe('datasourceName', () => {
@@ -201,7 +193,6 @@ describe('ExploreResultsButton', () => {
           const calls = fetchMock.calls(visualizeEndpoint);
           expect(calls).toHaveLength(1);
           const formData = calls[0][1].body;
-
           Object.keys(mockOptions).forEach(key => {
             // eslint-disable-next-line no-unused-expressions
             expect(formData.get(key)).toBeDefined();

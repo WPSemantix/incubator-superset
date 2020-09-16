@@ -18,8 +18,7 @@
  */
 import shortid from 'shortid';
 import JSONbig from 'json-bigint';
-import { t } from '@superset-ui/translation';
-import { SupersetClient } from '@superset-ui/connection';
+import { t, SupersetClient } from '@superset-ui/core';
 import invert from 'lodash/invert';
 import mapKeys from 'lodash/mapKeys';
 import { isFeatureEnabled, FeatureFlag } from 'src/featureFlags';
@@ -428,7 +427,7 @@ export function postStopQuery(query) {
       .then(() => dispatch(addSuccessToast(t('Query was stopped.'))))
       .catch(() =>
         dispatch(
-          addDangerToast(t('Failed at stopping query. ') + `'${query.id}'`),
+          addDangerToast(`${t('Failed at stopping query. ')}'${query.id}'`),
         ),
       );
   };
@@ -1230,7 +1229,7 @@ export function popDatasourceQuery(datasourceKey, sql) {
       .then(({ json }) =>
         dispatch(
           addQueryEditor({
-            title: 'Query ' + json.name,
+            title: `Query ${json.name}`,
             dbId: json.database.id,
             schema: json.schema,
             autorun: sql !== undefined,

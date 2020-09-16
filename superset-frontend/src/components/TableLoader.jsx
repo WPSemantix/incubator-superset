@@ -19,11 +19,10 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import { Table, Tr, Td } from 'reactable-arc';
-import { t } from '@superset-ui/translation';
-import { SupersetClient } from '@superset-ui/connection';
+import { t, SupersetClient } from '@superset-ui/core';
 
 import withToasts from '../messageToasts/enhancers/withToasts';
-import Loading from '../components/Loading';
+import Loading from './Loading';
 import '../../stylesheets/reactable-pagination.less';
 
 const propTypes = {
@@ -90,9 +89,9 @@ class TableLoader extends React.PureComponent {
         {this.state.data.map((row, i) => (
           <Tr key={i}>
             {columns.map(col => {
-              if (row.hasOwnProperty('_' + col)) {
+              if (row.hasOwnProperty(`_${col}`)) {
                 return (
-                  <Td key={col} column={col} value={row['_' + col]}>
+                  <Td key={col} column={col} value={row[`_${col}`]}>
                     {row[col]}
                   </Td>
                 );

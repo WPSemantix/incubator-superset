@@ -16,8 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { t } from '@superset-ui/translation';
-import { validateNonEmpty } from '@superset-ui/validator';
+import { t, validateNonEmpty } from '@superset-ui/core';
 import timeGrainSqlaAnimationOverrides from './timeGrainSqlaAnimationOverrides';
 import {
   filterNulls,
@@ -37,7 +36,6 @@ import {
 } from './Shared_DeckGL';
 
 export default {
-  requiresTime: true,
   onInit: controlState => ({
     ...controlState,
     time_grain_sqla: {
@@ -135,15 +133,17 @@ export default {
         [null, legendFormat],
         [
           {
-            ...dimension,
-            label: t('Categorical Color'),
-            description: t(
-              'Pick a dimension from which categorical colors are defined',
-            ),
+            name: 'dimension',
+            config: {
+              ...dimension.config,
+              label: t('Categorical Color'),
+              description: t(
+                'Pick a dimension from which categorical colors are defined',
+              ),
+            },
           },
-          'color_scheme',
-          'label_colors',
         ],
+        ['color_scheme', 'label_colors'],
       ],
     },
     {

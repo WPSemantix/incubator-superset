@@ -19,7 +19,9 @@ from datetime import datetime, timedelta
 from unittest.mock import Mock, patch, PropertyMock
 
 from flask_babel import gettext as __
+import pytest
 from selenium.common.exceptions import WebDriverException
+from slack import errors, WebClient
 
 from tests.test_app import app
 from superset import db
@@ -38,8 +40,7 @@ from superset.tasks.schedules import (
 )
 from superset.models.slice import Slice
 from tests.base_tests import SupersetTestCase
-
-from .utils import read_fixture
+from tests.utils import read_fixture
 
 
 class TestSchedules(SupersetTestCase):
@@ -59,9 +60,13 @@ class TestSchedules(SupersetTestCase):
                 delivery_type=EmailDeliveryType.inline,
             )
 
-            # Pick up a random slice and dashboard
-            slce = db.session.query(Slice).all()[0]
-            dashboard = db.session.query(Dashboard).all()[0]
+            # Pick up a sample slice and dashboard
+            slce = db.session.query(Slice).filter_by(slice_name="Participants").one()
+            dashboard = (
+                db.session.query(Dashboard)
+                .filter_by(dashboard_title="World Bank's Data")
+                .one()
+            )
 
             dashboard_schedule = DashboardEmailSchedule(**cls.common_data)
             dashboard_schedule.dashboard_id = dashboard.id
@@ -167,7 +172,6 @@ class TestSchedules(SupersetTestCase):
         mock_driver.find_elements_by_id.side_effect = [True, False]
 
         create_webdriver()
-        create_webdriver()
         mock_driver.add_cookie.assert_called_once()
 
     @patch("superset.tasks.schedules.firefox.webdriver.WebDriver")
@@ -188,7 +192,7 @@ class TestSchedules(SupersetTestCase):
         schedule = (
             db.session.query(DashboardEmailSchedule)
             .filter_by(id=self.dashboard_schedule)
-            .all()[0]
+            .one()
         )
 
         deliver_dashboard(
@@ -224,7 +228,7 @@ class TestSchedules(SupersetTestCase):
         schedule = (
             db.session.query(DashboardEmailSchedule)
             .filter_by(id=self.dashboard_schedule)
-            .all()[0]
+            .one()
         )
 
         schedule.delivery_type = EmailDeliveryType.attachment
@@ -268,7 +272,7 @@ class TestSchedules(SupersetTestCase):
         schedule = (
             db.session.query(DashboardEmailSchedule)
             .filter_by(id=self.dashboard_schedule)
-            .all()[0]
+            .one()
         )
 
         deliver_dashboard(
@@ -307,7 +311,7 @@ class TestSchedules(SupersetTestCase):
         schedule = (
             db.session.query(DashboardEmailSchedule)
             .filter_by(id=self.dashboard_schedule)
-            .all()[0]
+            .one()
         )
 
         # Send individual mails to the group
@@ -349,9 +353,7 @@ class TestSchedules(SupersetTestCase):
         element.screenshot_as_png = read_fixture("sample.png")
 
         schedule = (
-            db.session.query(SliceEmailSchedule)
-            .filter_by(id=self.slice_schedule)
-            .all()[0]
+            db.session.query(SliceEmailSchedule).filter_by(id=self.slice_schedule).one()
         )
 
         schedule.email_format = SliceEmailReportFormat.visualization
@@ -364,6 +366,7 @@ class TestSchedules(SupersetTestCase):
             schedule.delivery_type,
             schedule.email_format,
             schedule.deliver_as_group,
+            db.session,
         )
         mtime.sleep.assert_called_once()
         driver.screenshot.assert_not_called()
@@ -403,9 +406,7 @@ class TestSchedules(SupersetTestCase):
         element.screenshot_as_png = read_fixture("sample.png")
 
         schedule = (
-            db.session.query(SliceEmailSchedule)
-            .filter_by(id=self.slice_schedule)
-            .all()[0]
+            db.session.query(SliceEmailSchedule).filter_by(id=self.slice_schedule).one()
         )
 
         schedule.email_format = SliceEmailReportFormat.visualization
@@ -418,6 +419,7 @@ class TestSchedules(SupersetTestCase):
             schedule.delivery_type,
             schedule.email_format,
             schedule.deliver_as_group,
+            db.session,
         )
 
         mtime.sleep.assert_called_once()
@@ -453,9 +455,7 @@ class TestSchedules(SupersetTestCase):
         response.read.return_value = self.CSV
 
         schedule = (
-            db.session.query(SliceEmailSchedule)
-            .filter_by(id=self.slice_schedule)
-            .all()[0]
+            db.session.query(SliceEmailSchedule).filter_by(id=self.slice_schedule).one()
         )
 
         schedule.email_format = SliceEmailReportFormat.data
@@ -468,6 +468,7 @@ class TestSchedules(SupersetTestCase):
             schedule.delivery_type,
             schedule.email_format,
             schedule.deliver_as_group,
+            db.session,
         )
 
         send_email_smtp.assert_called_once()
@@ -499,9 +500,7 @@ class TestSchedules(SupersetTestCase):
         mock_urlopen.return_value.getcode.return_value = 200
         response.read.return_value = self.CSV
         schedule = (
-            db.session.query(SliceEmailSchedule)
-            .filter_by(id=self.slice_schedule)
-            .all()[0]
+            db.session.query(SliceEmailSchedule).filter_by(id=self.slice_schedule).one()
         )
 
         schedule.email_format = SliceEmailReportFormat.data
@@ -514,6 +513,7 @@ class TestSchedules(SupersetTestCase):
             schedule.delivery_type,
             schedule.email_format,
             schedule.deliver_as_group,
+            db.session,
         )
 
         send_email_smtp.assert_called_once()
@@ -530,3 +530,11 @@ class TestSchedules(SupersetTestCase):
                 "title": "[Report]  Participants",
             },
         )
+
+
+def test_slack_client_compatibility():
+    c2 = WebClient()
+    # slackclient >2.5.0 raises TypeError: a bytes-like object is required, not 'str
+    # and requires to path a filepath instead of the bytes directly
+    with pytest.raises(errors.SlackApiError):
+        c2.files_upload(channels="#bogdan-test2", file=b"blabla", title="Test upload")

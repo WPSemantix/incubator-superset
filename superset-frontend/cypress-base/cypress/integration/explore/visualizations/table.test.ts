@@ -29,10 +29,29 @@ import readResponseBlob from '../../../utils/readResponseBlob';
 describe('Visualization > Table', () => {
   const VIZ_DEFAULTS = { ...FORM_DATA_DEFAULTS, viz_type: 'table' };
 
+  const PERCENT_METRIC = {
+    expressionType: 'SQL',
+    sqlExpression: 'CAST(SUM(sum_girls)+AS+FLOAT)/SUM(num)',
+    column: null,
+    aggregate: null,
+    hasCustomLabel: true,
+    label: 'Girls',
+    optionName: 'metric_6qwzgc8bh2v_zox7hil1mzs',
+  };
+
   beforeEach(() => {
     cy.login();
     cy.server();
     cy.route('POST', '/superset/explore_json/**').as('getJson');
+  });
+
+  it('Use default time column', () => {
+    cy.visitChartByParams({
+      ...VIZ_DEFAULTS,
+      granularity_sqla: undefined,
+      metrics: ['count'],
+    });
+    cy.get('input[name="select-granularity_sqla"]').should('have.value', 'ds');
   });
 
   it('Format non-numeric metrics correctly', () => {
@@ -47,7 +66,7 @@ describe('Visualization > Table', () => {
     cy.get('.chart-container td:nth-child(1)').contains('2008 Q1');
     // other column with timestamp use raw timestamp
     cy.get('.chart-container td:nth-child(3)').contains('2008-01-01T00:00:00');
-    cy.get('.chart-container td').contains('other');
+    cy.get('.chart-container td:nth-child(4)').contains('other');
   });
 
   it('Format with table_timestamp_format', () => {
@@ -74,7 +93,7 @@ describe('Visualization > Table', () => {
   it('Test table with groupby', () => {
     cy.visitChartByParams({
       ...VIZ_DEFAULTS,
-      metrics: NUM_METRIC,
+      metrics: [NUM_METRIC, MAX_DS],
       groupby: ['name'],
     });
     cy.verifySliceSuccess({
@@ -84,10 +103,33 @@ describe('Visualization > Table', () => {
     });
   });
 
+  it('Test table with groupby + time column', () => {
+    cy.visitChartByParams({
+      ...VIZ_DEFAULTS,
+      include_time: true,
+      granularity_sqla: 'ds',
+      time_grain_sqla: 'P0.25Y',
+      metrics: [NUM_METRIC, MAX_DS],
+      groupby: ['name'],
+    });
+    cy.verifySliceSuccess({
+      waitAlias: '@getJson',
+      querySubstring: /groupby.*name/,
+      chartSelector: 'table',
+    });
+  });
+
+  it('Handle sorting correctly', () => {
+    cy.get('.chart-container th').contains('name').click();
+    cy.get('.chart-container td:nth-child(2):eq(0)').contains('Aaron');
+    cy.get('.chart-container th').contains('Time').click().click();
+    cy.get('.chart-container td:nth-child(1):eq(0)').contains('2008');
+  });
+
   it('Test table with percent metrics and groupby', () => {
     const formData = {
       ...VIZ_DEFAULTS,
-      percent_metrics: NUM_METRIC,
+      percent_metrics: PERCENT_METRIC,
       metrics: [],
       groupby: ['name'],
     };
@@ -133,9 +175,20 @@ describe('Visualization > Table', () => {
       metrics: [],
       row_limit: 10,
     };
-
     cy.visitChartByParams(JSON.stringify(formData));
+
+    // should display in raw records mode
+    cy.get('div[data-test="query_mode"] .btn.active').contains('Raw Records');
+    cy.get('div[data-test="all_columns"]').should('be.visible');
+    cy.get('div[data-test="groupby"]').should('not.be.visible');
+
     cy.verifySliceSuccess({ waitAlias: '@getJson', chartSelector: 'table' });
+
+    // should allow switch to aggregate mode
+    cy.get('div[data-test="query_mode"] .btn').contains('Aggregate').click();
+    cy.get('div[data-test="query_mode"] .btn.active').contains('Aggregate');
+    cy.get('div[data-test="all_columns"]').should('not.be.visible');
+    cy.get('div[data-test="groupby"]').should('be.visible');
   });
 
   it('Test table with columns, ordering, and row limit', () => {
@@ -171,15 +224,6 @@ describe('Visualization > Table', () => {
   });
 
   it('Tests table number formatting with % in metric name', () => {
-    const PERCENT_METRIC = {
-      expressionType: 'SQL',
-      sqlExpression: 'CAST(SUM(sum_girls)+AS+FLOAT)/SUM(num)',
-      column: null,
-      aggregate: null,
-      hasCustomLabel: true,
-      label: 'Girls',
-      optionName: 'metric_6qwzgc8bh2v_zox7hil1mzs',
-    };
     const formData = {
       ...VIZ_DEFAULTS,
       percent_metrics: PERCENT_METRIC,

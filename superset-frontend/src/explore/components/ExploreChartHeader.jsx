@@ -20,7 +20,7 @@ import React from 'react';
 import { connect } from 'react-redux';
 import { bindActionCreators } from 'redux';
 import PropTypes from 'prop-types';
-import { t } from '@superset-ui/translation';
+import { styled, t } from '@superset-ui/core';
 
 import { chartPropShape } from '../../dashboard/util/propShapes';
 import ExploreActionButtons from './ExploreActionButtons';
@@ -45,6 +45,7 @@ const propTypes = {
   addHistory: PropTypes.func,
   can_overwrite: PropTypes.bool.isRequired,
   can_download: PropTypes.bool.isRequired,
+  chartHeight: PropTypes.string.isRequired,
   isStarred: PropTypes.bool.isRequired,
   slice: PropTypes.object,
   sliceName: PropTypes.string,
@@ -53,6 +54,34 @@ const propTypes = {
   timeout: PropTypes.number,
   chart: chartPropShape,
 };
+
+const StyledHeader = styled.div`
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+
+  span[role='button'] {
+    display: flex;
+    height: 100%;
+  }
+
+  .right-button-panel {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: flex-end;
+
+    > .btn-group {
+      flex: 0 0 auto;
+      margin-left: ${({ theme }) => theme.gridUnit}px;
+    }
+  }
+`;
+
+const StyledButtons = styled.span`
+  display: flex;
+  align-items: center;
+`;
 
 export class ExploreChartHeader extends React.PureComponent {
   constructor(props) {
@@ -102,7 +131,7 @@ export class ExploreChartHeader extends React.PureComponent {
       this.props.chart.chartStatus,
     );
     return (
-      <div id="slice-header" className="clearfix panel-title-large">
+      <StyledHeader id="slice-header" className="clearfix panel-title-large">
         <EditableTitle
           title={this.getSliceName()}
           canEdit={!this.props.slice || this.props.can_overwrite}
@@ -110,12 +139,13 @@ export class ExploreChartHeader extends React.PureComponent {
         />
 
         {this.props.slice && (
-          <span>
+          <StyledButtons>
             <FaveStar
               itemId={this.props.slice.slice_id}
               fetchFaveStar={this.props.actions.fetchFaveStar}
               saveFaveStar={this.props.actions.saveFaveStar}
               isStarred={this.props.isStarred}
+              showTooltip
             />
             <PropertiesModal
               show={this.state.isPropertiesModalOpen}
@@ -136,15 +166,16 @@ export class ExploreChartHeader extends React.PureComponent {
                 <i className="fa fa-edit" />
               </span>
             </TooltipWrapper>
-          </span>
+          </StyledButtons>
         )}
         {this.props.chart.sliceFormData && (
           <AlteredSliceTag
+            className="altered"
             origFormData={this.props.chart.sliceFormData}
             currentFormData={formData}
           />
         )}
-        <div className="pull-right">
+        <div className="right-button-panel">
           {chartFinished && queryResponse && (
             <RowCountLabel
               rowcount={Number(queryResponse.rowcount) || 0}
@@ -162,18 +193,18 @@ export class ExploreChartHeader extends React.PureComponent {
             endTime={chartUpdateEndTime}
             isRunning={chartStatus === 'loading'}
             status={CHART_STATUS_MAP[chartStatus]}
-            style={{ fontSize: '10px', marginRight: '5px' }}
           />
           <ExploreActionButtons
             actions={this.props.actions}
             slice={this.props.slice}
             canDownload={this.props.can_download}
             chartStatus={chartStatus}
+            chartHeight={this.props.chartHeight}
             latestQueryFormData={latestQueryFormData}
             queryResponse={queryResponse}
           />
         </div>
-      </div>
+      </StyledHeader>
     );
   }
 }

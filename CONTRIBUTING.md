@@ -42,6 +42,7 @@ little bit helps, and credit will always be given.
       - [Merging](#merging)
       - [Post-merge Responsibility](#post-merge-responsibility)
   - [Managing Issues and PRs](#managing-issues-and-prs)
+  - [Reporting a Security Vulnerability](#reporting-a-security-vulnerability)
   - [Revert Guidelines](#revert-guidelines)
   - [Setup Local Environment for Development](#setup-local-environment-for-development)
     - [Documentation](#documentation)
@@ -204,7 +205,7 @@ Finally, never submit a PR that will put master branch in broken state. If the P
   - For Python, include it in `setup.py` denoting any specific restrictions and in `requirements.txt` pinned to a specific version which ensures that the application build is deterministic.
   - For TypeScript/JavaScript, include new libraries in `package.json`
 - **Tests:** The pull request should include tests, either as doctests, unit tests, or both. Make sure to resolve all errors and test failures. See [Testing](#testing) for how to run tests.
-- **Documentation:** If the pull request adds functionality, the docs should be updated as part of the same PR. Doc string are often sufficient, make sure to follow the sphinx compatible standards.
+- **Documentation:** If the pull request adds functionality, the docs should be updated as part of the same PR.
 - **CI:** Reviewers will not review the code until all CI tests are passed. Sometimes there can be flaky tests. You can close and open PR to re-run CI test. Please report if the issue persists. After the CI fix has been deployed to `master`, please rebase your PR.
 - **Code coverage:** Please ensure that code coverage does not decrease.
 - Remove `[WIP]` when ready for review. Please note that it may be merged soon after approved so please make sure the PR is ready to merge and do not expect more time for post-approval edits.
@@ -264,6 +265,12 @@ If the PR passes CI tests and does not have any `need:` labels, it is ready for 
 
 If an issue/PR has been inactive for >=30 days, it will be closed. If it does not have any status label, add `inactive`.
 
+## Reporting a Security Vulnerability
+
+Please report security vulnerabilities to private@superset.apache.org.
+
+In the event a community member discovers a security flaw in Superset, it is important to follow the [Apache Security Guidelines](https://www.apache.org/security/committers.html) and release a fix as quickly as possible before public disclosure. Reporting security vulnerabilities through the usual GitHub Issues channel is not ideal as it will publicize the flaw before a fix can be applied.
+
 ## Revert Guidelines
 
 Reverting changes that are causing issues in the master branch is a normal and expected part of the development process. In an open source community, the ramifications of a change cannot always be fully understood. With that in mind, here are some considerations to keep in mind when considering a revert:
@@ -292,68 +299,10 @@ cd incubator-superset
 
 ### Documentation
 
-The latest documentation and tutorial are available at https://superset.incubator.apache.org/.
+The latest documentation and tutorial are available at https://superset.apache.org/.
 
-Contributing to the official documentation is relatively easy, once you've setup
-your environment and done an edit end-to-end. The docs can be found in the
-`docs/` subdirectory of the repository, and are written in the
-[reStructuredText format](https://en.wikipedia.org/wiki/ReStructuredText) (.rst).
-If you've written Markdown before, you'll find the reStructuredText format familiar.
-
-Superset uses [Sphinx](http://www.sphinx-doc.org/en/1.5.1/) to convert the rst files
-in `docs/` to the final HTML output users see.
-
-Finally, to make changes to the rst files and build the docs using Sphinx,
-you'll need to install a handful of dependencies from the repo you cloned:
-
-```bash
-pip install -r docs/requirements.txt
-```
-
-To get the feel for how to edit and build the docs, let's edit a file, build
-the docs and see our changes in action. First, you'll want to
-[create a new branch](https://git-scm.com/book/en/v2/Git-Branching-Basic-Branching-and-Merging)
-to work on your changes:
-
-```bash
-git checkout -b changes-to-docs
-```
-
-Now, go ahead and edit one of the files under `docs/`, say `docs/tutorial.rst` - change
-it however you want. Check out the
-[ReStructuredText Primer](http://docutils.sourceforge.net/docs/user/rst/quickstart.html)
-for a reference on the formatting of the rst files.
-
-Once you've made your changes, run this command to convert the docs into HTML:
-
-```bash
-make html
-```
-
-You'll see a lot of output as Sphinx handles the conversion. After it's done, the
-HTML Sphinx generated should be in `docs/_build/html`. Navigate there
-and start a simple web server so we can check out the docs in a browser:
-
-```bash
-cd docs/_build/html
-python -m http.server # Python2 users should use SimpleHTTPServer
-
-```
-
-This will start a small Python web server listening on port 8000. Point your
-browser to http://localhost:8000, find the file
-you edited earlier, and check out your changes!
-
-If you've made a change you'd like to contribute to the actual docs, just commit
-your code, push your new branch to Github:
-
-```bash
-git add docs/tutorial.rst
-git commit -m 'Awesome new change to tutorial'
-git push origin changes-to-docs
-```
-
-Then, [open a pull request](https://help.github.com/articles/about-pull-requests/).
+The site is written using the Gatsby framework and docz for the
+documentation subsection. Find out more about it in `docs/README.md`
 
 #### Images
 
@@ -370,37 +319,21 @@ in the docs.
 
 For example, the image referenced above actually lives in `superset-frontend/images/tutorial`. Since the image is moved during the documentation build process, the docs reference the image in `_static/images/tutorial` instead.
 
-#### API documentation
-
-Generate the API documentation with:
-
-```bash
-pip install -r docs/requirements.txt
-python setup.py build_sphinx
-```
-
 ### Flask server
 
 #### OS Dependencies
 
 Make sure your machine meets the [OS dependencies](https://superset.incubator.apache.org/installation.html#os-dependencies) before following these steps.
 
-Developers should use a virtualenv.
-
-```bash
-pip install virtualenv
-```
-
-Then proceed with:
+Ensure Python versions >3.7, Then proceed with:
 
 ```bash
 # Create a virtual environemnt and activate it (recommended)
-virtualenv -p python3 venv # setup a python3.6 virtualenv
+python3 -m venv venv # setup a python3 virtualenv
 source venv/bin/activate
 
 # Install external dependencies
-pip install -r requirements.txt
-pip install -r requirements-dev.txt
+pip install -r requirements/local.txt
 
 # Install Superset in editable (development) mode
 pip install -e .
@@ -553,7 +486,7 @@ in combined feature flags of `{ 'FOO': True, 'BAR': True, 'BAZ': True }`.
 Superset uses Git pre-commit hooks courtesy of [pre-commit](https://pre-commit.com/). To install run the following:
 
 ```bash
-pip3 install -r requirements-dev.txt
+pip3 install -r requirements/integration.txt
 pre-commit install
 ```
 
@@ -598,7 +531,7 @@ or similar as the later will cause typing issues. The former is of type `List[Ca
 
 To ensure clarity, consistency, all readability, _all_ new functions should use
 [type hints](https://docs.python.org/3/library/typing.html) and include a
-docstring using Sphinx documentation.
+docstring.
 
 Note per [PEP-484](https://www.python.org/dev/peps/pep-0484/#exceptions) no
 syntax for listing explicitly raised exceptions is proposed and thus the
@@ -703,6 +636,17 @@ npm run cypress open
 
 See [`superset-frontend/cypress_build.sh`](https://github.com/apache/incubator-superset/blob/master/superset-frontend/cypress_build.sh).
 
+### Storybook
+
+Superset includes a [Storybook](https://storybook.js.org/) to preview the layout/styling of various Superset components, and variations thereof. To open and view the Storybook:
+
+```bash
+cd superset-frontend
+npm run storybook
+```
+
+When contributing new React components to Superset, please try to add a Story alongside the component's `jsx/tsx` file.
+
 ## Translating
 
 We use [Babel](http://babel.pocoo.org/en/latest/) to translate Superset.
@@ -803,7 +747,7 @@ Then, [extract strings for the new language](#extracting-new-strings-for-transla
 
 ### Improving visualizations
 
-Superset is working towards a plugin system where new visualizations can be installed as optional npm packages. To achieve this goal, we are not accepting pull requests for new community-contributed visualization types at the moment. However, bugfixes for current visualizations are welcome. To edit the frontend code for visualizations, you will have to check out a copy of [apache-superset/superset-ui](https://github.com/apache-superset/superset-ui):
+To edit the frontend code for visualizations, you will have to check out a copy of [apache-superset/superset-ui](https://github.com/apache-superset/superset-ui):
 
 ```bash
 git clone https://github.com/apache-superset/superset-ui.git
@@ -828,6 +772,26 @@ npm run dev-server
 When `superset-ui` packages are linked with `npm link`, the dev server will automatically load a package's source code from its `/src` directory, instead of the built modules in `lib/` or `esm/`.
 
 Note that every time you do `npm install`, you will lose the symlink(s) and may have to run `npm link` again.
+
+
+### Visualization Plugins
+
+The topic of authoring new plugins, whether you'd like to contribute
+it back or not has been well documented in the
+[So, You Want to Build a Superset Viz Plugin...](https://preset.io/blog/2020-07-02-hello-world/) blog post
+
+To contribute a plugin to Superset-UI, your plugin must meet the following criteria:
+* The plugin should be applicable to the community at large, not a particularly specialized use case
+* The plugin should be written with TypeScript
+* The plugin should contain sufficient unit/e2e tests
+* The plugin should use appropriate namespacing, e.g. a folder name of `plugin-chart-whatever` and a package name of `@superset-ui/plugin-chart-whatever`
+* The plugin should use them variables via Emotion, as passed in by the ThemeProvider
+* The plugin should provide adequate error handling (no data returned, malformatted data, invalid controls, etc.)
+* The plugin should contain documentation in the form of a populated `README.md` file
+* The plugin should have a meaningful and unique icon
+* Above all else, the plugin should come with a *commitment to maintenance* from the original author(s)
+
+Submissions will be considered for submission (or removal) on a case-by-case basis.
 
 ### Adding a DB migration
 

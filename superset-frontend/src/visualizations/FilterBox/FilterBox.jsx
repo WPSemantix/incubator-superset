@@ -18,22 +18,28 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { CreatableSelect } from 'src/components/Select';
-import { Button } from 'react-bootstrap';
-import { t } from '@superset-ui/translation';
+import { debounce } from 'lodash';
+import { max as d3Max } from 'd3-array';
+import { AsyncCreatableSelect, CreatableSelect } from 'src/components/Select';
+import Button from 'src/components/Button';
+import { t, styled, SupersetClient } from '@superset-ui/core';
 
-import DateFilterControl from '../../explore/components/controls/DateFilterControl';
-import ControlRow from '../../explore/components/ControlRow';
-import Control from '../../explore/components/Control';
-import controls from '../../explore/controls';
-import OnPasteSelect from '../../components/Select/OnPasteSelect';
-import { getDashboardFilterKey } from '../../dashboard/util/getDashboardFilterKey';
-import { getFilterColorMap } from '../../dashboard/util/dashboardFiltersColorMap';
+import FormLabel from 'src/components/FormLabel';
+
+import DateFilterControl from 'src/explore/components/controls/DateFilterControl';
+import ControlRow from 'src/explore/components/ControlRow';
+import Control from 'src/explore/components/Control';
+import controls from 'src/explore/controls';
+import { getExploreUrl } from 'src/explore/exploreUtils';
+import OnPasteSelect from 'src/components/Select/OnPasteSelect';
+import { getDashboardFilterKey } from 'src/dashboard/util/getDashboardFilterKey';
+import { getFilterColorMap } from 'src/dashboard/util/dashboardFiltersColorMap';
 import {
   FILTER_CONFIG_ATTRIBUTES,
+  FILTER_OPTIONS_LIMIT,
   TIME_FILTER_LABELS,
-} from '../../explore/constants';
-import FilterBadgeIcon from '../../components/FilterBadgeIcon';
+} from 'src/explore/constants';
+import FilterBadgeIcon from 'src/components/FilterBadgeIcon';
 
 import './FilterBox.less';
 
@@ -92,6 +98,13 @@ const defaultProps = {
   instantFiltering: false,
 };
 
+const Styles = styled.div`
+  height: 100%;
+  min-height: 100%;
+  max-height: 100%;
+  overflow: visible;
+`;
+
 class FilterBox extends React.Component {
   constructor(props) {
     super(props);
@@ -100,6 +113,8 @@ class FilterBox extends React.Component {
       // this flag is used by non-instant filter, to make the apply button enabled/disabled
       hasChanged: false,
     };
+    this.debouncerCache = {};
+    this.maxValueCache = {};
     this.changeFilter = this.changeFilter.bind(this);
     this.onFilterMenuOpen = this.onFilterMenuOpen.bind(this);
     this.onOpenDateFilterControl = this.onOpenDateFilterControl.bind(this);
@@ -131,6 +146,17 @@ class FilterBox extends React.Component {
     return mapFunc ? { ...control, ...mapFunc(this.props) } : control;
   }
 
+  /**
+   * Get known max value of a column
+   */
+  getKnownMax(key, choices) {
+    this.maxValueCache[key] = Math.max(
+      this.maxValueCache[key] || 0,
+      d3Max(choices || this.props.filtersChoices[key] || [], x => x.metric),
+    );
+    return this.maxValueCache[key];
+  }
+
   clickApply() {
     const { selectedValues } = this.state;
     this.setState({ hasChanged: false }, () => {
@@ -160,6 +186,75 @@ class FilterBox extends React.Component {
         this.props.onChange({ [fltr]: vals }, false);
       }
     });
+  }
+
+  /**
+   * Generate a debounce function that loads options for a specific column
+   */
+  debounceLoadOptions(key) {
+    if (!(key in this.debouncerCache)) {
+      this.debouncerCache[key] = debounce((input, callback) => {
+        this.loadOptions(key, input).then(callback);
+      }, 500);
+    }
+    return this.debouncerCache[key];
+  }
+
+  /**
+   * Transform select options, add bar background
+   */
+  transformOptions(options, max) {
+    const maxValue = max === undefined ? d3Max(options, x => x.metric) : max;
+    return options.map(opt => {
+      const perc = Math.round((opt.metric / maxValue) * 100);
+      const color = 'lightgrey';
+      const backgroundImage = `linear-gradient(to right, ${color}, ${color} ${perc}%, rgba(0,0,0,0) ${perc}%`;
+      const style = { backgroundImage };
+      return { value: opt.id, label: opt.id, style };
+    });
+  }
+
+  async loadOptions(key, inputValue = '') {
+    const input = inputValue.toLowerCase();
+    const sortAsc = this.props.filtersFields.find(x => x.key === key).asc;
+    const formData = {
+      ...this.props.rawFormData,
+      adhoc_filters: inputValue
+        ? [
+            {
+              clause: 'WHERE',
+              comparator: null,
+              expressionType: 'SQL',
+              // TODO: Evaluate SQL Injection risk
+              sqlExpression: `lower(${key}) like '%${input}%'`,
+            },
+          ]
+        : null,
+    };
+
+    const { json } = await SupersetClient.get({
+      url: getExploreUrl({
+        formData,
+        endpointType: 'json',
+        method: 'GET',
+      }),
+    });
+    const options = (json?.data?.[key] || []).filter(x => x.id);
+    if (!options || options.length === 0) {
+      return [];
+    }
+    if (input) {
+      // sort those starts with search query to front
+      options.sort((a, b) => {
+        const labelA = a.id.toLowerCase();
+        const labelB = b.id.toLowerCase();
+        const textOrder = labelB.startsWith(input) - labelA.startsWith(input);
+        return textOrder === 0
+          ? (a.metric - b.metric) * (sortAsc ? 1 : -1)
+          : textOrder;
+      });
+    }
+    return this.transformOptions(options, this.getKnownMax(key, options));
   }
 
   renderDateFilter() {
@@ -226,9 +321,12 @@ class FilterBox extends React.Component {
     }
     return datasourceFilters;
   }
+
   renderSelect(filterConfig) {
     const { filtersChoices } = this.props;
     const { selectedValues } = this.state;
+    this.debouncerCache = {};
+    this.maxValueCache = {};
 
     // Add created options to filtersChoices, even though it doesn't exist,
     // or these options will exist in query sql but invisible to end user.
@@ -237,13 +335,13 @@ class FilterBox extends React.Component {
         key => selectedValues.hasOwnProperty(key) && key in filtersChoices,
       )
       .forEach(key => {
-        const choices = filtersChoices[key] || [];
+        const choices = filtersChoices[key] || (filtersChoices[key] = []);
         const choiceIds = new Set(choices.map(f => f.id));
         const selectedValuesForKey = Array.isArray(selectedValues[key])
           ? selectedValues[key]
           : [selectedValues[key]];
         selectedValuesForKey
-          .filter(value => !choiceIds.has(value))
+          .filter(value => value !== null && !choiceIds.has(value))
           .forEach(value => {
             choices.unshift({
               filter: key,
@@ -255,7 +353,6 @@ class FilterBox extends React.Component {
       });
     const { key, label } = filterConfig;
     const data = filtersChoices[key] || [];
-    const max = Math.max(...data.map(d => d.metric));
     let value = selectedValues[key] || null;
 
     // Assign default value if required
@@ -273,20 +370,15 @@ class FilterBox extends React.Component {
 
     return (
       <OnPasteSelect
+        cacheOptions
+        loadOptions={this.debounceLoadOptions(key)}
+        defaultOptions={this.transformOptions(data)}
         key={key}
-        placeholder={t('Select [%s]', label)}
+        placeholder={t('Type or Select [%s]', label)}
         isMulti={filterConfig[FILTER_CONFIG_ATTRIBUTES.MULTIPLE]}
-        isClearable={filterConfig.clearable}
+        isClearable={filterConfig[FILTER_CONFIG_ATTRIBUTES.CLEARABLE]}
         value={value}
-        options={data
-          .filter(opt => opt.id !== null)
-          .map(opt => {
-            const perc = Math.round((opt.metric / max) * 100);
-            const color = 'lightgrey';
-            const backgroundImage = `linear-gradient(to right, ${color}, ${color} ${perc}%, rgba(0,0,0,0) ${perc}%`;
-            const style = { backgroundImage };
-            return { value: opt.id, label: opt.id, style };
-          })}
+        options={this.transformOptions(data)}
         onChange={newValue => {
           // avoid excessive re-renders
           if (newValue !== value) {
@@ -297,7 +389,12 @@ class FilterBox extends React.Component {
         onMenuOpen={() => this.onFilterMenuOpen(key)}
         onBlur={this.onFilterMenuClose}
         onMenuClose={this.onFilterMenuClose}
-        selectWrap={CreatableSelect}
+        selectWrap={
+          filterConfig[FILTER_CONFIG_ATTRIBUTES.SEARCH_ALL_OPTIONS] &&
+          data.length >= FILTER_OPTIONS_LIMIT
+            ? AsyncCreatableSelect
+            : CreatableSelect
+        }
         noResultsText={t('No results found')}
       />
     );
@@ -311,7 +408,7 @@ class FilterBox extends React.Component {
         <div key={key} className="m-b-5 filter-container">
           {this.renderFilterBadge(chartId, key, label)}
           <div>
-            <label htmlFor={`LABEL-${key}`}>{label}</label>
+            <FormLabel htmlFor={`LABEL-${key}`}>{label}</FormLabel>
             {this.renderSelect(filterConfig)}
           </div>
         </div>
@@ -335,23 +432,21 @@ class FilterBox extends React.Component {
     const { instantFiltering } = this.props;
 
     return (
-      <div className="scrollbar-container">
-        <div className="scrollbar-content">
-          {this.renderDateFilter()}
-          {this.renderDatasourceFilters()}
-          {this.renderFilters()}
-          {!instantFiltering && (
-            <Button
-              bsSize="small"
-              bsStyle="primary"
-              onClick={this.clickApply.bind(this)}
-              disabled={!this.state.hasChanged}
-            >
-              {t('Apply')}
-            </Button>
-          )}
-        </div>
-      </div>
+      <Styles>
+        {this.renderDateFilter()}
+        {this.renderDatasourceFilters()}
+        {this.renderFilters()}
+        {!instantFiltering && (
+          <Button
+            buttonSize="small"
+            buttonStyle="primary"
+            onClick={this.clickApply.bind(this)}
+            disabled={!this.state.hasChanged}
+          >
+            {t('Apply')}
+          </Button>
+        )}
+      </Styles>
     );
   }
 }

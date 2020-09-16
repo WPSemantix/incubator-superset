@@ -17,12 +17,13 @@
  * under the License.
  */
 import React from 'react';
-import styled from '@superset-ui/style';
+import { styled, SupersetClient, t } from '@superset-ui/core';
 import PropTypes from 'prop-types';
-import { Select, AsyncSelect } from 'src/components/Select';
-import { ControlLabel, Label } from 'react-bootstrap';
-import { t } from '@superset-ui/translation';
-import { SupersetClient } from '@superset-ui/connection';
+import rison from 'rison';
+import { AsyncSelect, CreatableSelect, Select } from 'src/components/Select';
+
+import Label from 'src/components/Label';
+import FormLabel from 'src/components/FormLabel';
 
 import SupersetAsyncSelect from './AsyncSelect';
 import RefreshLabel from './RefreshLabel';
@@ -30,7 +31,7 @@ import './TableSelector.less';
 
 const FieldTitle = styled.p`
   color: ${({ theme }) => theme.colors.secondary.light2};
-  font-size: ${({ theme }) => theme.typography.sizes.s};
+  font-size: ${({ theme }) => theme.typography.sizes.s}px;
   margin: 20px 0 10px 0;
   text-transform: uppercase;
 `;
@@ -52,6 +53,7 @@ const propTypes = {
   onChange: PropTypes.func,
   clearable: PropTypes.bool,
   handleError: PropTypes.func.isRequired,
+  isDatabaseSelectEnabled: PropTypes.bool,
 };
 
 const defaultProps = {
@@ -66,6 +68,7 @@ const defaultProps = {
   sqlLabMode: true,
   formMode: false,
   clearable: true,
+  isDatabaseSelectEnabled: true,
 };
 
 export default class TableSelector extends React.PureComponent {
@@ -103,11 +106,11 @@ export default class TableSelector extends React.PureComponent {
     });
   }
 
-  onDatabaseChange(db, selectChangeMeta) {
-    return this.changeDataBase(db);
+  onDatabaseChange(db, force) {
+    return this.changeDataBase(db, force);
   }
 
-  onSchemaChange(schemaOpt, selectActionMeta) {
+  onSchemaChange(schemaOpt) {
     return this.changeSchema(schemaOpt);
   }
 
@@ -185,10 +188,13 @@ export default class TableSelector extends React.PureComponent {
     const actualDbId = dbId || this.props.dbId;
     if (actualDbId) {
       this.setState({ schemaLoading: true });
-      const endpoint = `/superset/schemas/${actualDbId}/${forceRefresh}/`;
+      const queryParams = rison.encode({
+        force: Boolean(forceRefresh),
+      });
+      const endpoint = `/api/v1/database/${actualDbId}/schemas/?q=${queryParams}`;
       return SupersetClient.get({ endpoint })
         .then(({ json }) => {
-          const schemaOptions = json.schemas.map(s => ({
+          const schemaOptions = json.result.map(s => ({
             value: s,
             label: s,
             title: s,
@@ -240,10 +246,8 @@ export default class TableSelector extends React.PureComponent {
 
   renderDatabaseOption(db) {
     return (
-      <span>
-        <Label bsStyle="default" className="m-r-5">
-          {db.backend}
-        </Label>
+      <span title={db.database_name}>
+        <Label bsStyle="default">{db.backend}</Label>
         {db.database_name}
       </span>
     );
@@ -251,7 +255,7 @@ export default class TableSelector extends React.PureComponent {
 
   renderTableOption(option) {
     return (
-      <span className="TableLabel">
+      <span className="TableLabel" title={option.label}>
         <span className="m-r-5">
           <small className="text-muted">
             <i
@@ -274,14 +278,27 @@ export default class TableSelector extends React.PureComponent {
   }
 
   renderDatabaseSelect() {
+    const queryParams = rison.encode({
+      order_columns: 'database_name',
+      order_direction: 'asc',
+      page: 0,
+      page_size: -1,
+      ...(this.props.formMode
+        ? {}
+        : {
+            filters: [
+              {
+                col: 'expose_in_sqllab',
+                opr: 'eq',
+                value: true,
+              },
+            ],
+          }),
+    });
+
     return this.renderSelectRow(
       <SupersetAsyncSelect
-        dataEndpoint={
-          '/api/v1/database/?q=' +
-          '(keys:!(none),' +
-          'filters:!((col:expose_in_sqllab,opr:eq,value:!t)),' +
-          'order_columns:database_name,order_direction:asc,page:0,page_size:-1)'
-        }
+        dataEndpoint={`/api/v1/database/?q=${queryParams}`}
         onChange={this.onDatabaseChange}
         onAsyncError={() =>
           this.props.handleError(t('Error while fetching database list'))
@@ -298,6 +315,7 @@ export default class TableSelector extends React.PureComponent {
         optionRenderer={this.renderDatabaseOption}
         mutator={this.dbMutator}
         placeholder={t('Select a database')}
+        isDisabled={!this.props.isDatabaseSelectEnabled}
         autoSelect
       />,
     );
@@ -342,31 +360,49 @@ export default class TableSelector extends React.PureComponent {
       tableSelectDisabled = true;
     }
     const options = this.state.tableOptions;
-    const select = this.props.schema ? (
-      <Select
-        name="select-table"
-        isLoading={this.state.tableLoading}
-        ignoreAccents={false}
-        placeholder={t('Select table or type table name')}
-        autosize={false}
-        onChange={this.changeTable}
-        options={options}
-        value={this.state.tableName}
-        optionRenderer={this.renderTableOption}
-      />
-    ) : (
-      <AsyncSelect
-        name="async-select-table"
-        placeholder={tableSelectPlaceholder}
-        disabled={tableSelectDisabled}
-        autosize={false}
-        onChange={this.changeTable}
-        value={this.state.tableName}
-        loadOptions={this.getTableNamesBySubStr}
-        optionRenderer={this.renderTableOption}
-        isDisabled={this.props.formMode}
-      />
-    );
+    let select = null;
+    if (this.props.schema && !this.props.formMode) {
+      select = (
+        <Select
+          name="select-table"
+          isLoading={this.state.tableLoading}
+          ignoreAccents={false}
+          placeholder={t('Select table or type table name')}
+          autosize={false}
+          onChange={this.changeTable}
+          options={options}
+          value={this.state.tableName}
+          optionRenderer={this.renderTableOption}
+        />
+      );
+    } else if (this.props.formMode) {
+      select = (
+        <CreatableSelect
+          name="select-table"
+          isLoading={this.state.tableLoading}
+          ignoreAccents={false}
+          placeholder={t('Select table or type table name')}
+          autosize={false}
+          onChange={this.changeTable}
+          options={options}
+          value={this.state.tableName}
+          optionRenderer={this.renderTableOption}
+        />
+      );
+    } else {
+      select = (
+        <AsyncSelect
+          name="async-select-table"
+          placeholder={tableSelectPlaceholder}
+          isDisabled={tableSelectDisabled}
+          autosize={false}
+          onChange={this.changeTable}
+          value={this.state.tableName}
+          loadOptions={this.getTableNamesBySubStr}
+          optionRenderer={this.renderTableOption}
+        />
+      );
+    }
     const refresh = !this.props.formMode && (
       <RefreshLabel
         onClick={() => this.changeSchema({ value: this.props.schema }, true)}
@@ -379,14 +415,14 @@ export default class TableSelector extends React.PureComponent {
   renderSeeTableLabel() {
     return (
       <div className="section">
-        <ControlLabel>
+        <FormLabel>
           {t('See table schema')}{' '}
           {this.props.schema && (
             <small>
               ({this.state.tableOptions.length} in <i>{this.props.schema}</i>)
             </small>
           )}
-        </ControlLabel>
+        </FormLabel>
       </div>
     );
   }

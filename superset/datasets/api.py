@@ -25,6 +25,7 @@ from marshmallow import ValidationError
 
 from superset.connectors.sqla.models import SqlaTable
 from superset.constants import RouteMethod
+from superset.databases.filters import DatabaseFilter
 from superset.datasets.commands.create import CreateDatasetCommand
 from superset.datasets.commands.delete import DeleteDatasetCommand
 from superset.datasets.commands.exceptions import (
@@ -42,6 +43,7 @@ from superset.datasets.dao import DatasetDAO
 from superset.datasets.schemas import (
     DatasetPostSchema,
     DatasetPutSchema,
+    DatasetRelatedObjectsResponse,
     get_export_ids_schema,
 )
 from superset.views.base import DatasourceFilter, generate_download_headers
@@ -50,7 +52,6 @@ from superset.views.base_api import (
     RelatedFieldFilter,
     statsd_metrics,
 )
-from superset.views.database.filters import DatabaseFilter
 from superset.views.filters import FilterRelatedOwners
 
 logger = logging.getLogger(__name__)
@@ -66,18 +67,20 @@ class DatasetRestApi(BaseSupersetModelRestApi):
     include_route_methods = RouteMethod.REST_MODEL_VIEW_CRUD_SET | {
         RouteMethod.EXPORT,
         RouteMethod.RELATED,
+        RouteMethod.DISTINCT,
         "refresh",
         "related_objects",
     }
     list_columns = [
         "id",
-        "database_id",
-        "database_name",
-        "changed_by_fk",
+        "database.id",
+        "database.database_name",
         "changed_by_name",
         "changed_by_url",
+        "changed_by.first_name",
         "changed_by.username",
-        "changed_on",
+        "changed_on_utc",
+        "changed_on_delta_humanized",
         "default_endpoint",
         "explore_url",
         "kind",
@@ -89,7 +92,16 @@ class DatasetRestApi(BaseSupersetModelRestApi):
         "sql",
         "table_name",
     ]
+    list_select_columns = list_columns + ["changed_on", "changed_by_fk"]
+    order_columns = [
+        "table_name",
+        "schema",
+        "changed_by.first_name",
+        "changed_on_delta_humanized",
+        "database.database_name",
+    ]
     show_columns = [
+        "id",
         "database.database_name",
         "database.id",
         "table_name",
@@ -110,6 +122,8 @@ class DatasetRestApi(BaseSupersetModelRestApi):
         "owners.last_name",
         "columns",
         "metrics",
+        "datasource_type",
+        "url",
     ]
     add_model_schema = DatasetPostSchema()
     edit_model_schema = DatasetPutSchema()
@@ -138,6 +152,9 @@ class DatasetRestApi(BaseSupersetModelRestApi):
     }
     filter_rel_fields = {"database": [["id", DatabaseFilter, lambda: []]]}
     allowed_rel_fields = {"database", "owners"}
+    allowed_distinct_fields = {"schema"}
+
+    openapi_spec_component_schemas = (DatasetRelatedObjectsResponse,)
 
     @expose("/", methods=["POST"])
     @protect()
@@ -434,48 +451,12 @@ class DatasetRestApi(BaseSupersetModelRestApi):
               type: integer
           responses:
             200:
-              description: chart and dashboard counts
+            200:
+              description: Query result
               content:
                 application/json:
                   schema:
-                    type: object
-                    properties:
-                      charts:
-                        type: object
-                        properties:
-                          count:
-                            type: integer
-                          result:
-                            type: array
-                            items:
-                              type: object
-                              properties:
-                                id:
-                                  type: integer
-                                slice_name:
-                                  type: string
-                                viz_type:
-                                  type: string
-                      dashboards:
-                        type: object
-                        properties:
-                          count:
-                            type: integer
-                          result:
-                            type: array
-                            items:
-                              type: object
-                              properties:
-                                id:
-                                  type: integer
-                                json_metadata:
-                                  type: object
-                                slug:
-                                  type: string
-                                title:
-                                  type: string
-            400:
-              $ref: '#/components/responses/400'
+                    $ref: "#/components/schemas/DatasetRelatedObjectsResponse"
             401:
               $ref: '#/components/responses/401'
             404:
@@ -483,31 +464,29 @@ class DatasetRestApi(BaseSupersetModelRestApi):
             500:
               $ref: '#/components/responses/500'
         """
-        try:
-            data = DatasetDAO.get_related_objects(pk)
-            charts = [
-                {
-                    "id": chart.id,
-                    "slice_name": chart.slice_name,
-                    "viz_type": chart.viz_type,
-                }
-                for chart in data["charts"]
-            ]
-            dashboards = [
-                {
-                    "id": dashboard.id,
-                    "json_metadata": dashboard.json_metadata,
-                    "slug": dashboard.slug,
-                    "title": dashboard.dashboard_title,
-                }
-                for dashboard in data["dashboards"]
-            ]
-            return self.response(
-                200,
-                charts={"count": len(charts), "result": charts},
-                dashboards={"count": len(dashboards), "result": dashboards},
-            )
-        except DatasetNotFoundError:
+        dataset = DatasetDAO.find_by_id(pk)
+        if not dataset:
             return self.response_404()
-        except DatasetForbiddenError:
-            return self.response_403()
+        data = DatasetDAO.get_related_objects(pk)
+        charts = [
+            {
+                "id": chart.id,
+                "slice_name": chart.slice_name,
+                "viz_type": chart.viz_type,
+            }
+            for chart in data["charts"]
+        ]
+        dashboards = [
+            {
+                "id": dashboard.id,
+                "json_metadata": dashboard.json_metadata,
+                "slug": dashboard.slug,
+                "title": dashboard.dashboard_title,
+            }
+            for dashboard in data["dashboards"]
+        ]
+        return self.response(
+            200,
+            charts={"count": len(charts), "result": charts},
+            dashboards={"count": len(dashboards), "result": dashboards},
+        )

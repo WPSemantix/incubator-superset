@@ -36,18 +36,20 @@ import {
   FormControl,
 } from 'react-bootstrap';
 import { Table } from 'reactable-arc';
-import { t } from '@superset-ui/translation';
-import { SupersetClient } from '@superset-ui/connection';
+import { t } from '@superset-ui/core';
 
+import Button from 'src/components/Button';
 import getClientErrorObject from '../../utils/getClientErrorObject';
-import CopyToClipboard from './../../components/CopyToClipboard';
+import CopyToClipboard from '../../components/CopyToClipboard';
 import { getChartDataRequest } from '../../chart/chartAction';
-
+import downloadAsImage from '../../utils/downloadAsImage';
 import Loading from '../../components/Loading';
-import ModalTrigger from './../../components/ModalTrigger';
-import Button from '../../components/Button';
+import ModalTrigger from '../../components/ModalTrigger';
 import RowCountLabel from './RowCountLabel';
-import { prepareCopyToClipboardTabularData } from '../../utils/common';
+import {
+  applyFormattingToTabularData,
+  prepareCopyToClipboardTabularData,
+} from '../../utils/common';
 import PropertiesModal from './PropertiesModal';
 import { sliceUpdated } from '../actions/exploreActions';
 
@@ -61,6 +63,7 @@ const propTypes = {
   animation: PropTypes.bool,
   queryResponse: PropTypes.object,
   chartStatus: PropTypes.string,
+  chartHeight: PropTypes.string.isRequired,
   latestQueryFormData: PropTypes.object.isRequired,
   slice: PropTypes.object,
 };
@@ -87,6 +90,7 @@ export class DisplayQueryButton extends React.PureComponent {
     this.openPropertiesModal = this.openPropertiesModal.bind(this);
     this.closePropertiesModal = this.closePropertiesModal.bind(this);
   }
+
   beforeOpen(resultType) {
     this.setState({ isLoading: true });
 
@@ -115,24 +119,31 @@ export class DisplayQueryButton extends React.PureComponent {
         });
       });
   }
+
   changeFilterText(event) {
     this.setState({ filterText: event.target.value });
   }
+
   redirectSQLLab() {
     this.props.onOpenInEditor(this.props.latestQueryFormData);
   }
+
   openPropertiesModal() {
     this.setState({ isPropertiesModalOpen: true });
   }
+
   closePropertiesModal() {
     this.setState({ isPropertiesModalOpen: false });
   }
+
   renderQueryModalBody() {
     if (this.state.isLoading) {
       return <Loading />;
-    } else if (this.state.error) {
+    }
+    if (this.state.error) {
       return <pre>{this.state.error}</pre>;
-    } else if (this.state.query) {
+    }
+    if (this.state.query) {
       return (
         <div>
           <CopyToClipboard
@@ -152,12 +163,15 @@ export class DisplayQueryButton extends React.PureComponent {
     }
     return null;
   }
+
   renderResultsModalBody() {
     if (this.state.isLoading) {
       return <Loading />;
-    } else if (this.state.error) {
+    }
+    if (this.state.error) {
       return <pre>{this.state.error}</pre>;
-    } else if (this.state.data) {
+    }
+    if (this.state.data) {
       if (this.state.data.length === 0) {
         return 'No data';
       }
@@ -165,6 +179,7 @@ export class DisplayQueryButton extends React.PureComponent {
     }
     return null;
   }
+
   renderDataTable(data) {
     return (
       <div style={{ overflow: 'auto' }}>
@@ -197,7 +212,7 @@ export class DisplayQueryButton extends React.PureComponent {
         <Table
           className="table table-condensed"
           sortable
-          data={data}
+          data={applyFormattingToTabularData(data)}
           hideFilterInput
           filterBy={this.state.filterText}
           filterable={data.length ? Object.keys(data[0]) : null}
@@ -206,18 +221,22 @@ export class DisplayQueryButton extends React.PureComponent {
       </div>
     );
   }
+
   renderSamplesModalBody() {
     if (this.state.isLoading) {
       return <Loading />;
-    } else if (this.state.error) {
+    }
+    if (this.state.error) {
       return <pre>{this.state.error}</pre>;
-    } else if (this.state.data) {
+    }
+    if (this.state.data) {
       return this.renderDataTable(this.state.data);
     }
     return null;
   }
+
   render() {
-    const { animation, slice } = this.props;
+    const { animation, chartHeight, slice } = this.props;
     return (
       <DropdownButton
         noCaret
@@ -277,6 +296,18 @@ export class DisplayQueryButton extends React.PureComponent {
             {t('Run in SQL Lab')}
           </MenuItem>
         )}
+        <MenuItem
+          onClick={downloadAsImage(
+            '.chart-container',
+            // eslint-disable-next-line camelcase
+            slice?.slice_name ?? t('New chart'),
+            {
+              height: parseInt(chartHeight, 10),
+            },
+          )}
+        >
+          {t('Download as image')}
+        </MenuItem>
       </DropdownButton>
     );
   }

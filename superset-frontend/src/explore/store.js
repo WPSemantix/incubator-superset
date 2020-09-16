@@ -17,7 +17,7 @@
  * under the License.
  */
 /* eslint camelcase: 0 */
-import { getChartControlPanelRegistry } from '@superset-ui/chart';
+import { getChartControlPanelRegistry } from '@superset-ui/core';
 import { getAllControlsState, getFormDataFromControls } from './controlUtils';
 import controls from './controls';
 
@@ -39,7 +39,6 @@ export function getControlsState(state, inputFormData) {
    * adds value keys coming from inputFormData passed here. This can't be an action creator
    * just yet because it's used in both the explore and dashboard views.
    * */
-
   // Getting a list of active control names for the current viz
   const formData = { ...inputFormData };
   const vizType = formData.viz_type || 'table';

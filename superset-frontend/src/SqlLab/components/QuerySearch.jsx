@@ -18,10 +18,9 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { Button } from 'react-bootstrap';
+import Button from 'src/components/Button';
 import Select from 'src/components/Select';
-import { t } from '@superset-ui/translation';
-import { SupersetClient } from '@superset-ui/connection';
+import { t, SupersetClient } from '@superset-ui/core';
 
 import Loading from '../../components/Loading';
 import QueryTable from './QueryTable';
@@ -44,8 +43,6 @@ class QuerySearch extends React.PureComponent {
   constructor(props) {
     super(props);
     this.state = {
-      userLoading: false,
-      userOptions: [],
       databaseId: null,
       userId: null,
       searchText: null,
@@ -136,7 +133,7 @@ class QuerySearch extends React.PureComponent {
     const validParams = params.filter(function (p) {
       return p !== '';
     });
-    return baseUrl + '?' + validParams.join('&');
+    return `${baseUrl}?${validParams.join('&')}`;
   }
 
   changeStatus(status) {
@@ -150,14 +147,14 @@ class QuerySearch extends React.PureComponent {
 
   userLabel(user) {
     if (user.first_name && user.last_name) {
-      return user.first_name + ' ' + user.last_name;
+      return `${user.first_name} ${user.last_name}`;
     }
     return user.username;
   }
 
   userMutator(data) {
     const options = [];
-    for (let i = 0; i < data.pks.length; i++) {
+    for (let i = 0; i < data.pks.length; i += 1) {
       options.push({
         value: data.pks[i],
         label: this.userLabel(data.result[i]),
@@ -273,8 +270,8 @@ class QuerySearch extends React.PureComponent {
             />
 
             <Button
-              bsSize="small"
-              bsStyle="success"
+              buttonSize="small"
+              buttonStyle="success"
               onClick={this.refreshQueries}
             >
               {t('Search')}

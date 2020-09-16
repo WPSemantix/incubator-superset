@@ -20,7 +20,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import prison
-from flask import g
+from flask import current_app, g
 
 import tests.test_app
 from superset import app, appbuilder, db, security_manager, viz
@@ -531,6 +531,52 @@ class TestRolePermission(SupersetTestCase):
         )  # wb_health_population slice, has access
         self.assertNotIn("Girl Name Cloud", data)  # birth_names slice, no access
 
+    def test_public_sync_role_data_perms(self):
+        """
+        Security: Tests if the sync role method preserves data access permissions
+        if they already exist on a public role.
+        Also check that non data access permissions are removed
+        """
+        table = db.session.query(SqlaTable).filter_by(table_name="birth_names").one()
+        self.grant_public_access_to_table(table)
+        public_role = security_manager.get_public_role()
+        unwanted_pvm = security_manager.find_permission_view_menu(
+            "menu_access", "Security"
+        )
+        public_role.permissions.append(unwanted_pvm)
+        db.session.commit()
+
+        security_manager.sync_role_definitions()
+        public_role = security_manager.get_public_role()
+        public_role_resource_names = [
+            permission.view_menu.name for permission in public_role.permissions
+        ]
+
+        assert table.get_perm() in public_role_resource_names
+        assert "Security" not in public_role_resource_names
+
+        # Cleanup
+        self.revoke_public_access_to_table(table)
+
+    def test_public_sync_role_builtin_perms(self):
+        """
+        Security: Tests public role creation based on a builtin role
+        """
+        current_app.config["PUBLIC_ROLE_LIKE"] = "TestRole"
+
+        security_manager.sync_role_definitions()
+        public_role = security_manager.get_public_role()
+        public_role_resource_names = [
+            [permission.view_menu.name, permission.permission.name]
+            for permission in public_role.permissions
+        ]
+        for pvm in current_app.config["FAB_ROLES"]["TestRole"]:
+            assert pvm in public_role_resource_names
+
+        # Cleanup
+        current_app.config["PUBLIC_ROLE_LIKE"] = "Gamma"
+        security_manager.sync_role_definitions()
+
     def test_sqllab_gamma_user_schema_access_to_sqllab(self):
         session = db.session
 
@@ -570,6 +616,9 @@ class TestRolePermission(SupersetTestCase):
         self.assert_can_read(view_menu, permissions_set)
         self.assert_can_write(view_menu, permissions_set)
 
+    def assert_can_menu(self, view_menu, permissions_set):
+        self.assertIn(("menu_access", view_menu), permissions_set)
+
     def assert_can_gamma(self, perm_set):
         self.assert_can_read("TableModelView", perm_set)
 
@@ -592,10 +641,24 @@ class TestRolePermission(SupersetTestCase):
         self.assertIn(("can_explore", "Superset"), perm_set)
         self.assertIn(("can_explore_json", "Superset"), perm_set)
         self.assertIn(("can_userinfo", "UserDBModelView"), perm_set)
+        self.assert_can_menu("Databases", perm_set)
+        self.assert_can_menu("Datasets", perm_set)
+        self.assert_can_menu("Data", perm_set)
+        self.assert_can_menu("Charts", perm_set)
+        self.assert_can_menu("Dashboards", perm_set)
 
     def assert_can_alpha(self, perm_set):
+        self.assert_can_all("AnnotationLayerModelView", perm_set)
+        self.assert_can_all("CssTemplateModelView", perm_set)
         self.assert_can_all("TableModelView", perm_set)
-
+        self.assert_can_read("QueryView", perm_set)
+        self.assertIn(("can_import_dashboards", "Superset"), perm_set)
+        self.assertIn(("can_this_form_post", "CsvToDatabaseView"), perm_set)
+        self.assertIn(("can_this_form_get", "CsvToDatabaseView"), perm_set)
+        self.assert_can_menu("Manage", perm_set)
+        self.assert_can_menu("Annotation Layers", perm_set)
+        self.assert_can_menu("CSS Templates", perm_set)
+        self.assert_can_menu("Upload a CSV", perm_set)
         self.assertIn(("all_datasource_access", "all_datasource_access"), perm_set)
 
     def assert_cannot_alpha(self, perm_set):
@@ -616,6 +679,10 @@ class TestRolePermission(SupersetTestCase):
         self.assertIn(("can_sync_druid_source", "Superset"), perm_set)
         self.assertIn(("can_override_role_permissions", "Superset"), perm_set)
         self.assertIn(("can_approve", "Superset"), perm_set)
+
+        self.assert_can_menu("Security", perm_set)
+        self.assert_can_menu("List Users", perm_set)
+        self.assert_can_menu("List Roles", perm_set)
 
     def test_is_admin_only(self):
         self.assertFalse(
@@ -703,7 +770,10 @@ class TestRolePermission(SupersetTestCase):
 
     def test_gamma_permissions_basic(self):
         self.assert_can_gamma(get_perm_tuples("Gamma"))
-        self.assert_cannot_alpha(get_perm_tuples("Alpha"))
+        self.assert_cannot_alpha(get_perm_tuples("Gamma"))
+
+    def test_public_permissions_basic(self):
+        self.assert_can_gamma(get_perm_tuples("Public"))
 
     @unittest.skipUnless(
         SupersetTestCase.is_module_installed("pydruid"), "pydruid not installed"
@@ -767,6 +837,9 @@ class TestRolePermission(SupersetTestCase):
         assert_can_all("SliceModelView")
         assert_can_all("DashboardModelView")
 
+        assert_cannot_write("UserDBModelView")
+        assert_cannot_write("RoleModelView")
+
         self.assertIn(("can_add_slices", "Superset"), gamma_perm_set)
         self.assertIn(("can_copy_dash", "Superset"), gamma_perm_set)
         self.assertIn(("can_created_dashboards", "Superset"), gamma_perm_set)
@@ -784,9 +857,9 @@ class TestRolePermission(SupersetTestCase):
     def test_views_are_secured(self):
         """Preventing the addition of unsecured views without has_access decorator"""
         # These FAB views are secured in their body as opposed to by decorators
-        method_whitelist = ("action", "action_post")
+        method_allowlist = ("action", "action_post")
         # List of redirect & other benign views
-        views_whitelist = [
+        views_allowlist = [
             ["MyIndexView", "index"],
             ["UtilView", "back"],
             ["LocaleView", "index"],
@@ -807,8 +880,8 @@ class TestRolePermission(SupersetTestCase):
                 view_class, predicate=inspect.ismethod
             ):
                 if (
-                    name not in method_whitelist
-                    and [class_name, name] not in views_whitelist
+                    name not in method_allowlist
+                    and [class_name, name] not in views_allowlist
                     and hasattr(value, "_urls")
                     and not hasattr(value, "_permission_name")
                 ):
@@ -947,7 +1020,7 @@ class TestRowLevelSecurity(SupersetTestCase):
             .filter(SqlaTable.table_name.in_(["energy_usage", "unicode_test"]))
             .all()
         )
-        self.rls_entry.clause = "value > 1"
+        self.rls_entry.clause = "value > {{ cache_key_wrapper(1) }}"
         self.rls_entry.roles.append(
             security_manager.find_role("Gamma")
         )  # db.session.query(Role).filter_by(name="Gamma").first())
@@ -979,7 +1052,8 @@ class TestRowLevelSecurity(SupersetTestCase):
             extras={},
         )
         sql = tbl.get_query_str(query_obj)
-        self.assertIn("value > 1", sql)
+        assert tbl.get_extra_cache_keys(query_obj) == [1]
+        assert "value > 1" in sql
 
     def test_rls_filter_doesnt_alter_query(self):
         g.user = self.get_user(
@@ -998,7 +1072,8 @@ class TestRowLevelSecurity(SupersetTestCase):
             extras={},
         )
         sql = tbl.get_query_str(query_obj)
-        self.assertNotIn("value > 1", sql)
+        assert tbl.get_extra_cache_keys(query_obj) == []
+        assert "value > 1" not in sql
 
     def test_multiple_table_filter_alters_another_tables_query(self):
         g.user = self.get_user(
@@ -1017,4 +1092,5 @@ class TestRowLevelSecurity(SupersetTestCase):
             extras={},
         )
         sql = tbl.get_query_str(query_obj)
-        self.assertIn("value > 1", sql)
+        assert tbl.get_extra_cache_keys(query_obj) == [1]
+        assert "value > 1" in sql

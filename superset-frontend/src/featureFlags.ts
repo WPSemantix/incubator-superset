@@ -26,13 +26,14 @@ export enum FeatureFlag {
   ESTIMATE_QUERY_COST = 'ESTIMATE_QUERY_COST',
   SHARE_QUERIES_VIA_KV_STORE = 'SHARE_QUERIES_VIA_KV_STORE',
   SQLLAB_BACKEND_PERSISTENCE = 'SQLLAB_BACKEND_PERSISTENCE',
-  LIST_VIEWS_SIP34_FILTER_UI = 'LIST_VIEWS_SIP34_FILTER_UI',
+  THUMBNAILS = 'THUMBNAILS',
 }
 
 export type FeatureFlagMap = {
   [key in FeatureFlag]?: boolean;
 };
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 declare global {
   interface Window {
     featureFlags: FeatureFlagMap;

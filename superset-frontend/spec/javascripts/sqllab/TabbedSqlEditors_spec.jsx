@@ -23,6 +23,7 @@ import URI from 'urijs';
 import { Tab } from 'react-bootstrap';
 import { shallow, mount } from 'enzyme';
 import sinon from 'sinon';
+import { supersetTheme, ThemeProvider } from '@superset-ui/core';
 import TabbedSqlEditors from 'src/SqlLab/components/TabbedSqlEditors';
 import SqlEditor from 'src/SqlLab/components/SqlEditor';
 
@@ -98,6 +99,8 @@ describe('TabbedSqlEditors', () => {
       uriStub.returns({ id: 1 });
       wrapper = mount(<TabbedSqlEditors {...mockedProps} />, {
         context: { store },
+        wrappingComponent: ThemeProvider,
+        wrappingComponentProps: { theme: supersetTheme },
       });
       expect(TabbedSqlEditors.prototype.componentDidMount.calledOnce).toBe(
         true,
@@ -110,6 +113,8 @@ describe('TabbedSqlEditors', () => {
       uriStub.returns({ savedQueryId: 1 });
       wrapper = mount(<TabbedSqlEditors {...mockedProps} />, {
         context: { store },
+        wrappingComponent: ThemeProvider,
+        wrappingComponentProps: { theme: supersetTheme },
       });
       expect(TabbedSqlEditors.prototype.componentDidMount.calledOnce).toBe(
         true,
@@ -122,6 +127,8 @@ describe('TabbedSqlEditors', () => {
       uriStub.returns({ sql: 1, dbid: 1 });
       wrapper = mount(<TabbedSqlEditors {...mockedProps} />, {
         context: { store },
+        wrappingComponent: ThemeProvider,
+        wrappingComponentProps: { theme: supersetTheme },
       });
       expect(TabbedSqlEditors.prototype.componentDidMount.calledOnce).toBe(
         true,
@@ -131,11 +138,14 @@ describe('TabbedSqlEditors', () => {
       );
     });
   });
-  describe('componentWillReceiveProps', () => {
+  describe('UNSAFE_componentWillReceiveProps', () => {
     let spy;
     beforeEach(() => {
       wrapper = getWrapper();
-      spy = sinon.spy(TabbedSqlEditors.prototype, 'componentWillReceiveProps');
+      spy = sinon.spy(
+        TabbedSqlEditors.prototype,
+        'UNSAFE_componentWillReceiveProps',
+      );
       wrapper.setProps({ queryEditors, queries, tabHistory, tables });
     });
     afterEach(() => {

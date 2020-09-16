@@ -57,22 +57,16 @@
  * each and every visualization type.
  */
 import React from 'react';
-import { t } from '@superset-ui/translation';
 import {
+  t,
   getCategoricalSchemeRegistry,
   getSequentialSchemeRegistry,
-} from '@superset-ui/color';
-import {
   legacyValidateInteger,
   validateNonEmpty,
-} from '@superset-ui/validator';
+  ColumnOption,
+} from '@superset-ui/core';
 
-import { ColumnOption } from '@superset-ui/chart-controls';
-import {
-  formatSelectOptionsForRange,
-  formatSelectOptions,
-  mainMetric,
-} from '../modules/utils';
+import { formatSelectOptions, mainMetric } from '../modules/utils';
 import { TIME_FILTER_LABELS } from './constants';
 
 const categoricalSchemeRegistry = getCategoricalSchemeRegistry();
@@ -136,7 +130,7 @@ const groupByControl = {
   valueRenderer: c => <ColumnOption column={c} />,
   valueKey: 'column_name',
   allowAll: true,
-  filterOption: ({ label, value, data: opt }, text) =>
+  filterOption: ({ data: opt }, text) =>
     (opt.column_name &&
       opt.column_name.toLowerCase().indexOf(text.toLowerCase()) >= 0) ||
     (opt.verbose_name &&
@@ -166,7 +160,7 @@ const metrics = {
     return metric ? [metric] : null;
   },
   mapStateToProps: state => {
-    const datasource = state.datasource;
+    const { datasource } = state;
     return {
       columns: datasource ? datasource.columns : [],
       savedMetrics: datasource ? datasource.metrics : [],
@@ -201,12 +195,12 @@ export const controls = {
 
   datasource: {
     type: 'DatasourceControl',
-    label: t('Datasource'),
+    label: t('Dataset'),
     default: null,
     description: null,
-    mapStateToProps: (state, control, actions) => ({
-      datasource: state.datasource,
-      onDatasourceSave: actions ? actions.setDatasource : () => {},
+    mapStateToProps: ({ datasource }) => ({
+      datasource,
+      isEditable: !!datasource,
     }),
   },
 
@@ -316,7 +310,6 @@ export const controls = {
         'filter below is applied against this column or ' +
         'expression',
     ),
-    default: control => control.default,
     clearable: false,
     optionRenderer: c => <ColumnOption column={c} showType />,
     valueRenderer: c => <ColumnOption column={c} />,

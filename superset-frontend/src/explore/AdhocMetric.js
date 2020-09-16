@@ -87,7 +87,7 @@ export default class AdhocMetric {
 
   getDefaultLabel() {
     const label = this.translateToSql();
-    return label.length < 43 ? label : label.substring(0, 40) + '...';
+    return label.length < 43 ? label : `${label.substring(0, 40)}...`;
   }
 
   translateToSql() {
@@ -95,7 +95,8 @@ export default class AdhocMetric {
       return `${this.aggregate || ''}(${
         (this.column && this.column.column_name) || ''
       })`;
-    } else if (this.expressionType === EXPRESSION_TYPES.SQL) {
+    }
+    if (this.expressionType === EXPRESSION_TYPES.SQL) {
       return this.sqlExpression;
     }
     return '';
@@ -125,7 +126,8 @@ export default class AdhocMetric {
   isValid() {
     if (this.expressionType === EXPRESSION_TYPES.SIMPLE) {
       return !!(this.column && this.aggregate);
-    } else if (this.expressionType === EXPRESSION_TYPES.SQL) {
+    }
+    if (this.expressionType === EXPRESSION_TYPES.SQL) {
       return !!this.sqlExpression;
     }
     return false;

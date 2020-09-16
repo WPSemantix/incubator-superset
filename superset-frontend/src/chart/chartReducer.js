@@ -17,7 +17,7 @@
  * under the License.
  */
 /* eslint camelcase: 0 */
-import { t } from '@superset-ui/translation';
+import { t } from '@superset-ui/core';
 import { now } from '../modules/dates';
 import * as actions from './chartAction';
 
@@ -83,24 +83,6 @@ export default function chartReducer(charts = {}, action) {
           'An error occurred while rendering the visualization: %s',
           action.error,
         ),
-      };
-    },
-    [actions.CHART_UPDATE_TIMEOUT](state) {
-      return {
-        ...state,
-        chartStatus: 'failed',
-        chartAlert:
-          `${t('Query timeout')} - ` +
-          t(
-            `visualization queries are set to timeout at ${action.timeout} seconds. `,
-          ) +
-          t(
-            'Perhaps your data has grown, your database is under unusual load, ' +
-              'or you are simply querying a data source that is too large ' +
-              'to be processed within the timeout range. ' +
-              'If that is the case, we recommend that you summarize your data further.',
-          ),
-        chartUpdateEndTime: now(),
       };
     },
     [actions.CHART_UPDATE_FAILED](state) {
@@ -186,7 +168,8 @@ export default function chartReducer(charts = {}, action) {
   if (action.type === actions.REMOVE_CHART) {
     delete charts[action.key];
     return charts;
-  } else if (action.type === actions.UPDATE_CHART_ID) {
+  }
+  if (action.type === actions.UPDATE_CHART_ID) {
     const { newId, key } = action;
     charts[newId] = {
       ...charts[key],

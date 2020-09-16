@@ -59,6 +59,7 @@ from superset.typing import FilterValues, Granularity, Metric, QueryObjectDict
 from superset.utils import core as utils, import_datasource
 
 try:
+    import requests
     from pydruid.client import PyDruid
     from pydruid.utils.aggregators import count
     from pydruid.utils.dimensions import (
@@ -77,7 +78,6 @@ try:
         Quantile,
         Quantiles,
     )
-    import requests
 except ImportError:
     pass
 
@@ -206,11 +206,11 @@ class DruidCluster(Model, AuditMixinNullable, ImportMixin):
         If ``datasource_name`` is specified, only that datasource is updated
         """
         ds_list = self.get_datasources()
-        blacklist = conf.get("DRUID_DATA_SOURCE_BLACKLIST", [])
+        denylist = conf.get("DRUID_DATA_SOURCE_DENYLIST", [])
         ds_refresh: List[str] = []
         if not datasource_name:
-            ds_refresh = list(filter(lambda ds: ds not in blacklist, ds_list))
-        elif datasource_name not in blacklist and datasource_name in ds_list:
+            ds_refresh = list(filter(lambda ds: ds not in denylist, ds_list))
+        elif datasource_name not in denylist and datasource_name in ds_list:
             ds_refresh.append(datasource_name)
         else:
             return
@@ -539,6 +539,10 @@ class DruidDatasource(Model, BaseDatasource):
     @property
     def name(self) -> str:
         return self.datasource_name
+
+    @property
+    def datasource_type(self) -> str:
+        return self.type
 
     @property
     def schema(self) -> Optional[str]:

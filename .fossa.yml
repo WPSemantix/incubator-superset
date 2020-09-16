@@ -36,3 +36,5 @@ analyze:
     type: pip
     target: .
     path: .
+    options:
+      requirements: ./requirements/testing.txt

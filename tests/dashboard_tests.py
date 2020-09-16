@@ -20,9 +20,8 @@ import json
 import unittest
 from random import random
 
-from flask import escape
+from flask import escape, url_for
 from sqlalchemy import func
-from typing import Dict
 
 import tests.test_app
 from superset import db, security_manager
@@ -30,7 +29,6 @@ from superset.connectors.sqla.models import SqlaTable
 from superset.models import core as models
 from superset.models.dashboard import Dashboard
 from superset.models.slice import Slice
-from superset.views import core as views
 
 from .base_tests import SupersetTestCase
 
@@ -56,6 +54,9 @@ class TestDashboard(SupersetTestCase):
             urls[dash.dashboard_title] = dash.url
         for title, url in urls.items():
             assert escape(title) in self.client.get(url).data.decode("utf-8")
+
+    def test_superset_dashboard_url(self):
+        url_for("Superset.dashboard", dashboard_id_or_slug=1)
 
     def test_new_dashboard(self):
         self.login(username="admin")
@@ -319,6 +320,9 @@ class TestDashboard(SupersetTestCase):
         resp = self.get_resp("/api/v1/dashboard/")
         self.assertNotIn("/superset/dashboard/world_health/", resp)
 
+        # Cleanup
+        self.revoke_public_access_to_table(table)
+
     def test_dashboard_with_created_by_can_be_accessed_by_public_users(self):
         self.logout()
         table = db.session.query(SqlaTable).filter_by(table_name="birth_names").one()
@@ -331,6 +335,8 @@ class TestDashboard(SupersetTestCase):
         db.session.commit()
 
         assert "Births" in self.get_resp("/superset/dashboard/births/")
+        # Cleanup
+        self.revoke_public_access_to_table(table)
 
     def test_only_owners_can_save(self):
         dash = db.session.query(Dashboard).filter_by(slug="births").first()
@@ -398,6 +404,9 @@ class TestDashboard(SupersetTestCase):
         resp = self.get_resp("/api/v1/dashboard/")
         self.assertNotIn(f"/superset/dashboard/{hidden_dash_slug}/", resp)
         self.assertIn(f"/superset/dashboard/{published_dash_slug}/", resp)
+
+        # Cleanup
+        self.revoke_public_access_to_table(table)
 
     def test_users_can_view_own_dashboard(self):
         user = security_manager.find_user("gamma")

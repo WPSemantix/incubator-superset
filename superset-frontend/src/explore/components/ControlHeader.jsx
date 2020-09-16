@@ -18,9 +18,10 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { t } from '@superset-ui/translation';
-import { ControlLabel, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { t } from '@superset-ui/core';
 import { InfoTooltipWithTrigger } from '@superset-ui/chart-controls';
+import { OverlayTrigger, Tooltip } from 'react-bootstrap';
+import FormLabel from 'src/components/FormLabel';
 
 const propTypes = {
   name: PropTypes.string,
@@ -74,6 +75,7 @@ export default class ControlHeader extends React.Component {
     }
     return null;
   }
+
   render() {
     if (!this.props.label) {
       return null;
@@ -83,9 +85,11 @@ export default class ControlHeader extends React.Component {
     return (
       <div className="ControlHeader" data-test={`${this.props.name}-header`}>
         <div className="pull-left">
-          <ControlLabel>
+          <FormLabel>
             {this.props.leftNode && <span>{this.props.leftNode}</span>}
             <span
+              role="button"
+              tabIndex={0}
               onClick={this.props.onClick}
               className={labelClass}
               style={{ cursor: this.props.onClick ? 'pointer' : '' }}
@@ -97,7 +101,7 @@ export default class ControlHeader extends React.Component {
                 <OverlayTrigger
                   placement="top"
                   overlay={
-                    <Tooltip id={'error-tooltip'}>{this.props.warning}</Tooltip>
+                    <Tooltip id="error-tooltip">{this.props.warning}</Tooltip>
                   }
                 >
                   <i className="fa fa-exclamation-circle text-warning" />
@@ -109,7 +113,7 @@ export default class ControlHeader extends React.Component {
                 <OverlayTrigger
                   placement="top"
                   overlay={
-                    <Tooltip id={'error-tooltip'}>{this.props.danger}</Tooltip>
+                    <Tooltip id="error-tooltip">{this.props.danger}</Tooltip>
                   }
                 >
                   <i className="fa fa-exclamation-circle text-danger" />
@@ -121,7 +125,7 @@ export default class ControlHeader extends React.Component {
                 <OverlayTrigger
                   placement="top"
                   overlay={
-                    <Tooltip id={'error-tooltip'}>
+                    <Tooltip id="error-tooltip">
                       {this.props.validationErrors.join(' ')}
                     </Tooltip>
                   }
@@ -131,7 +135,7 @@ export default class ControlHeader extends React.Component {
               </span>
             )}
             {this.renderOptionalIcons()}
-          </ControlLabel>
+          </FormLabel>
         </div>
         {this.props.rightNode && (
           <div className="pull-right">{this.props.rightNode}</div>
