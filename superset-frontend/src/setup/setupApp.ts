@@ -19,7 +19,8 @@
 /* eslint global-require: 0 */
 import $ from 'jquery';
 import { SupersetClient } from '@superset-ui/core';
-import getClientErrorObject, {
+import {
+  getClientErrorObject,
   ClientErrorObject,
 } from '../utils/getClientErrorObject';
 import setupErrorMessages from './setupErrorMessages';
@@ -82,9 +83,7 @@ export default function setupApp() {
 
   // A set of hacks to allow apps to run within a FAB template
   // this allows for the server side generated menus to function
-  // @ts-ignore
   window.$ = $;
-  // @ts-ignore
   window.jQuery = $;
   require('bootstrap');
 

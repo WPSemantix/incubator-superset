@@ -27,7 +27,13 @@ from pandas import DataFrame
 from superset import app, is_feature_enabled
 from superset.exceptions import QueryObjectValidationError
 from superset.typing import Metric
-from superset.utils import core as utils, pandas_postprocessing
+from superset.utils import pandas_postprocessing
+from superset.utils.core import (
+    DTTM_ALIAS,
+    get_since_until,
+    json_int_dttm_ser,
+    parse_human_timedelta,
+)
 from superset.views.utils import get_time_range_endpoints
 
 config = app.config
@@ -50,6 +56,7 @@ DEPRECATED_EXTRAS_FIELDS = (
     DeprecatedField(old_name="where", new_name="where"),
     DeprecatedField(old_name="having", new_name="having"),
     DeprecatedField(old_name="having_filters", new_name="having_druid"),
+    DeprecatedField(old_name="druid_time_origin", new_name="druid_time_origin"),
 )
 
 
@@ -59,6 +66,8 @@ class QueryObject:
     and druid. The query objects are constructed on the client.
     """
 
+    annotation_layers: List[Dict[str, Any]]
+    applied_time_extras: Dict[str, str]
     granularity: Optional[str]
     from_dttm: Optional[datetime]
     to_dttm: Optional[datetime]
@@ -79,13 +88,15 @@ class QueryObject:
 
     def __init__(
         self,
+        annotation_layers: Optional[List[Dict[str, Any]]] = None,
+        applied_time_extras: Optional[Dict[str, str]] = None,
         granularity: Optional[str] = None,
         metrics: Optional[List[Union[Dict[str, Any], str]]] = None,
         groupby: Optional[List[str]] = None,
         filters: Optional[List[Dict[str, Any]]] = None,
         time_range: Optional[str] = None,
         time_shift: Optional[str] = None,
-        is_timeseries: bool = False,
+        is_timeseries: Optional[bool] = None,
         timeseries_limit: int = 0,
         row_limit: Optional[int] = None,
         row_offset: Optional[int] = None,
@@ -97,11 +108,19 @@ class QueryObject:
         post_processing: Optional[List[Optional[Dict[str, Any]]]] = None,
         **kwargs: Any,
     ):
+        annotation_layers = annotation_layers or []
         metrics = metrics or []
         extras = extras or {}
         is_sip_38 = is_feature_enabled("SIP_38_VIZ_REARCHITECTURE")
+        self.annotation_layers = [
+            layer
+            for layer in annotation_layers
+            # formula annotations don't affect the payload, hence can be dropped
+            if layer["annotationType"] != "FORMULA"
+        ]
+        self.applied_time_extras = applied_time_extras or {}
         self.granularity = granularity
-        self.from_dttm, self.to_dttm = utils.get_since_until(
+        self.from_dttm, self.to_dttm = get_since_until(
             relative_start=extras.get(
                 "relative_start", config["DEFAULT_RELATIVE_START_TIME"]
             ),
@@ -111,20 +130,28 @@ class QueryObject:
             time_range=time_range,
             time_shift=time_shift,
         )
-        self.is_timeseries = is_timeseries
+        # is_timeseries is True if time column is in groupby
+        self.is_timeseries = (
+            is_timeseries
+            if is_timeseries is not None
+            else (DTTM_ALIAS in groupby if groupby else False)
+        )
         self.time_range = time_range
-        self.time_shift = utils.parse_human_timedelta(time_shift)
+        self.time_shift = parse_human_timedelta(time_shift)
         self.post_processing = [
             post_proc for post_proc in post_processing or [] if post_proc
         ]
         if not is_sip_38:
             self.groupby = groupby or []
 
-        # Temporary solution for backward compatibility issue due the new format of
-        # non-ad-hoc metric which needs to adhere to superset-ui per
-        # https://git.io/Jvm7P.
+        # Support metric reference/definition in the format of
+        #   1. 'metric_name'   - name of predefined metric
+        #   2. { label: 'label_name' }  - legacy format for a predefined metric
+        #   3. { expressionType: 'SIMPLE' | 'SQL', ... } - adhoc metric
         self.metrics = [
-            metric if "expressionType" in metric else metric["label"]  # type: ignore
+            metric
+            if isinstance(metric, str) or "expressionType" in metric
+            else metric["label"]  # type: ignore
             for metric in metrics
         ]
 
@@ -228,12 +255,33 @@ class QueryObject:
             cache_dict["time_range"] = self.time_range
         if self.post_processing:
             cache_dict["post_processing"] = self.post_processing
+
+        annotation_fields = [
+            "annotationType",
+            "descriptionColumns",
+            "intervalEndColumn",
+            "name",
+            "overrides",
+            "sourceType",
+            "timeColumn",
+            "titleColumn",
+            "value",
+        ]
+        annotation_layers = [
+            {field: layer[field] for field in annotation_fields if field in layer}
+            for layer in self.annotation_layers
+        ]
+        # only add to key if there are annotations present that affect the payload
+        if annotation_layers:
+            cache_dict["annotation_layers"] = annotation_layers
+
         json_data = self.json_dumps(cache_dict, sort_keys=True)
         return hashlib.md5(json_data.encode("utf-8")).hexdigest()
 
-    def json_dumps(self, obj: Any, sort_keys: bool = False) -> str:
+    @staticmethod
+    def json_dumps(obj: Any, sort_keys: bool = False) -> str:
         return json.dumps(
-            obj, default=utils.json_int_dttm_ser, ignore_nan=True, sort_keys=sort_keys
+            obj, default=json_int_dttm_ser, ignore_nan=True, sort_keys=sort_keys
         )
 
     def exec_post_processing(self, df: DataFrame) -> DataFrame:
@@ -243,7 +291,8 @@ class QueryObject:
         :param df: DataFrame returned from database model.
         :return: new DataFrame to which all post processing operations have been
                  applied
-        :raises ChartDataValidationError: If the post processing operation in incorrect
+        :raises QueryObjectValidationError: If the post processing operation
+                 is incorrect
         """
         for post_process in self.post_processing:
             operation = post_process.get("operation")

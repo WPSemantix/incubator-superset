@@ -27,6 +27,7 @@ from flask_appbuilder.security.sqla.models import (
     assoc_permissionview_role,
     assoc_user_role,
     PermissionView,
+    User,
 )
 from flask_appbuilder.security.views import (
     PermissionModelView,
@@ -36,8 +37,9 @@ from flask_appbuilder.security.views import (
     ViewMenuModelView,
 )
 from flask_appbuilder.widgets import ListWidget
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.engine.base import Connection
+from sqlalchemy.orm import Session
 from sqlalchemy.orm.mapper import Mapper
 from sqlalchemy.orm.query import Query as SqlaQuery
 
@@ -46,7 +48,7 @@ from superset.connectors.connector_registry import ConnectorRegistry
 from superset.constants import RouteMethod
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.exceptions import SupersetSecurityException
-from superset.utils.core import DatasourceName
+from superset.utils.core import DatasourceName, RowLevelSecurityFilterType
 
 if TYPE_CHECKING:
     from superset.common.query_context import QueryContext
@@ -62,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 class SupersetSecurityListWidget(ListWidget):
     """
-        Redeclaring to avoid circular imports
+    Redeclaring to avoid circular imports
     """
 
     template = "superset/fab_overrides/list.html"
@@ -70,8 +72,8 @@ class SupersetSecurityListWidget(ListWidget):
 
 class SupersetRoleListWidget(ListWidget):
     """
-        Role model view from FAB already uses a custom list widget override
-        So we override the override
+    Role model view from FAB already uses a custom list widget override
+    So we override the override
     """
 
     template = "superset/fab_overrides/list_role.html"
@@ -107,7 +109,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
     SecurityManager
 ):
     userstatschartview = None
-    READ_ONLY_MODEL_VIEWS = {"DatabaseAsync", "DatabaseView", "DruidClusterModelView"}
+    READ_ONLY_MODEL_VIEWS = {"Database", "DruidClusterModelView", "DynamicPlugin"}
 
     USER_MODEL_VIEWS = {
         "UserDBModelView",
@@ -118,9 +120,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
     }
 
     GAMMA_READ_ONLY_MODEL_VIEWS = {
-        "SqlMetricInlineView",
-        "TableColumnInlineView",
-        "TableModelView",
+        "Dataset",
         "DruidColumnInlineView",
         "DruidDatasourceModelView",
         "DruidMetricInlineView",
@@ -133,8 +133,10 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         "Refresh Druid Metadata",
         "ResetPasswordView",
         "RoleModelView",
-        "LogModelView",
+        "Log",
         "Security",
+        "Row Level Security",
+        "Row Level Security Filters",
         "RowLevelSecurityFiltersModelView",
     } | USER_MODEL_VIEWS
 
@@ -156,7 +158,13 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         "all_query_access",
     }
 
-    READ_ONLY_PERMISSION = {"can_show", "can_list", "can_get", "can_external_metadata"}
+    READ_ONLY_PERMISSION = {
+        "can_show",
+        "can_list",
+        "can_get",
+        "can_external_metadata",
+        "can_read",
+    }
 
     ALPHA_ONLY_PERMISSIONS = {
         "muldelete",
@@ -551,7 +559,6 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         Creates missing FAB permissions for datasources, schemas and metrics.
         """
 
-        from superset.connectors.base.models import BaseMetric
         from superset.models import core as models
 
         logger.info("Fetching a set of all perms to lookup which ones are missing")
@@ -575,11 +582,6 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         databases = self.get_session.query(models.Database).all()
         for database in databases:
             merge_pv("database_access", database.perm)
-
-        logger.info("Creating missing metrics permissions")
-        metrics: List[BaseMetric] = []
-        for datasource_class in ConnectorRegistry.sources.values():
-            metrics += list(self.get_session.query(datasource_class.metric_class).all())
 
     def clean_perms(self) -> None:
         """
@@ -625,7 +627,7 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
         if conf.get("PUBLIC_ROLE_LIKE_GAMMA", False):
             logger.warning(
                 "The config `PUBLIC_ROLE_LIKE_GAMMA` is deprecated and will be removed "
-                "in Superset 1.0. Please use `PUBLIC_ROLE_LIKE ` instead."
+                "in Superset 1.0. Please use `PUBLIC_ROLE_LIKE` instead."
             )
             self.copy_role("Gamma", self.auth_role_public, merge=True)
 
@@ -990,9 +992,22 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                     self.get_datasource_access_error_object(datasource)
                 )
 
-    def get_rls_filters(  # pylint: disable=no-self-use
-        self, table: "BaseDatasource"
-    ) -> List[SqlaQuery]:
+    def get_user_by_username(
+        self, username: str, session: Session = None
+    ) -> Optional[User]:
+        """
+        Retrieves a user by it's username case sensitive. Optional session parameter
+        utility method normally useful for celery tasks where the session
+        need to be scoped
+        """
+        session = session or self.get_session
+        return (
+            session.query(self.user_model)
+            .filter(self.user_model.username == username)
+            .one_or_none()
+        )
+
+    def get_rls_filters(self, table: "BaseDatasource") -> List[SqlaQuery]:
         """
         Retrieves the appropriate row level security filters for the current user and
         the passed table.
@@ -1012,8 +1027,23 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
                 .filter(assoc_user_role.c.user_id == g.user.id)
                 .subquery()
             )
-            filter_roles = (
+            regular_filter_roles = (
                 self.get_session.query(RLSFilterRoles.c.rls_filter_id)
+                .join(RowLevelSecurityFilter)
+                .filter(
+                    RowLevelSecurityFilter.filter_type
+                    == RowLevelSecurityFilterType.REGULAR
+                )
+                .filter(RLSFilterRoles.c.role_id.in_(user_roles))
+                .subquery()
+            )
+            base_filter_roles = (
+                self.get_session.query(RLSFilterRoles.c.rls_filter_id)
+                .join(RowLevelSecurityFilter)
+                .filter(
+                    RowLevelSecurityFilter.filter_type
+                    == RowLevelSecurityFilterType.BASE
+                )
                 .filter(RLSFilterRoles.c.role_id.in_(user_roles))
                 .subquery()
             )
@@ -1024,10 +1054,25 @@ class SupersetSecurityManager(  # pylint: disable=too-many-public-methods
             )
             query = (
                 self.get_session.query(
-                    RowLevelSecurityFilter.id, RowLevelSecurityFilter.clause
+                    RowLevelSecurityFilter.id,
+                    RowLevelSecurityFilter.group_key,
+                    RowLevelSecurityFilter.clause,
                 )
                 .filter(RowLevelSecurityFilter.id.in_(filter_tables))
-                .filter(RowLevelSecurityFilter.id.in_(filter_roles))
+                .filter(
+                    or_(
+                        and_(
+                            RowLevelSecurityFilter.filter_type
+                            == RowLevelSecurityFilterType.REGULAR,
+                            RowLevelSecurityFilter.id.in_(regular_filter_roles),
+                        ),
+                        and_(
+                            RowLevelSecurityFilter.filter_type
+                            == RowLevelSecurityFilterType.BASE,
+                            RowLevelSecurityFilter.id.notin_(base_filter_roles),
+                        ),
+                    )
+                )
             )
             return query.all()
         return []

@@ -26,6 +26,8 @@ export const ErrorTypeEnum = {
 
   // DB Engine errors
   GENERIC_DB_ENGINE_ERROR: 'GENERIC_DB_ENGINE_ERROR',
+  COLUMN_DOES_NOT_EXIST_ERROR: 'COLUMN_DOES_NOT_EXIST_ERROR',
+  TABLE_DOES_NOT_EXIST_ERROR: 'TABLE_DOES_NOT_EXIST_ERROR',
 
   // Viz errors
   VIZ_GET_DF_ERROR: 'VIZ_GET_DF_ERROR',
@@ -40,6 +42,9 @@ export const ErrorTypeEnum = {
 
   // Other errors
   BACKEND_TIMEOUT_ERROR: 'BACKEND_TIMEOUT_ERROR',
+
+  // Sqllab error
+  MISSING_TEMPLATE_PARAMS_ERROR: 'MISSING_TEMPLATE_PARAMS_ERROR',
 } as const;
 
 type ValueOf<T> = T[keyof T];

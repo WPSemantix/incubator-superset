@@ -15,14 +15,17 @@
 # specific language governing permissions and limitations
 # under the License.
 import logging
+from datetime import datetime
+from io import BytesIO
 from typing import Any
+from zipfile import ZipFile
 
-from flask import g, Response
+from flask import g, Response, send_file
 from flask_appbuilder.api import expose, protect, rison, safe
 from flask_appbuilder.models.sqla.interface import SQLAInterface
 from flask_babel import ngettext
 
-from superset.constants import RouteMethod
+from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.databases.filters import DatabaseFilter
 from superset.models.sql_lab import SavedQuery
 from superset.queries.saved_queries.commands.bulk_delete import (
@@ -32,9 +35,15 @@ from superset.queries.saved_queries.commands.exceptions import (
     SavedQueryBulkDeleteFailedError,
     SavedQueryNotFoundError,
 )
-from superset.queries.saved_queries.filters import SavedQueryFilter
+from superset.queries.saved_queries.commands.export import ExportSavedQueriesCommand
+from superset.queries.saved_queries.filters import (
+    SavedQueryAllTextFilter,
+    SavedQueryFavoriteFilter,
+    SavedQueryFilter,
+)
 from superset.queries.saved_queries.schemas import (
     get_delete_ids_schema,
+    get_export_ids_schema,
     openapi_spec_methods_override,
 )
 from superset.views.base_api import BaseSupersetModelRestApi, statsd_metrics
@@ -46,11 +55,14 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
     datamodel = SQLAInterface(SavedQuery)
 
     include_route_methods = RouteMethod.REST_MODEL_VIEW_CRUD_SET | {
+        RouteMethod.EXPORT,
         RouteMethod.RELATED,
         RouteMethod.DISTINCT,
         "bulk_delete",  # not using RouteMethod since locally defined
     }
-    class_permission_name = "SavedQueryView"
+    class_permission_name = "SavedQuery"
+    method_permission_name = MODEL_API_RW_METHOD_PERMISSION_MAP
+
     resource_name = "saved_query"
     allow_browser_login = True
 
@@ -70,6 +82,8 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         "sql_tables",
     ]
     list_columns = [
+        "changed_on_delta_humanized",
+        "created_on",
         "created_by.first_name",
         "created_by.id",
         "created_by.last_name",
@@ -77,10 +91,13 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         "database.id",
         "db_id",
         "description",
+        "id",
         "label",
         "schema",
         "sql",
         "sql_tables",
+        "rows",
+        "last_run_delta_humanized",
     ]
     add_columns = ["db_id", "description", "label", "schema", "sql"]
     edit_columns = add_columns
@@ -89,12 +106,23 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
         "label",
         "description",
         "sql",
+        "rows",
         "created_by.first_name",
         "database.database_name",
+        "created_on",
+        "changed_on_delta_humanized",
+        "last_run_delta_humanized",
     ]
+
+    search_columns = ["id", "database", "label", "schema", "created_by"]
+    search_filters = {
+        "id": [SavedQueryFavoriteFilter],
+        "label": [SavedQueryAllTextFilter],
+    }
 
     apispec_parameter_schemas = {
         "get_delete_ids_schema": get_delete_ids_schema,
+        "get_export_ids_schema": get_export_ids_schema,
     }
     openapi_spec_tag = "Queries"
     openapi_spec_methods = openapi_spec_methods_override
@@ -117,9 +145,7 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
     @safe
     @statsd_metrics
     @rison(get_delete_ids_schema)
-    def bulk_delete(
-        self, **kwargs: Any
-    ) -> Response:  # pylint: disable=arguments-differ
+    def bulk_delete(self, **kwargs: Any) -> Response:
         """Delete bulk Saved Queries
         ---
         delete:
@@ -166,3 +192,62 @@ class SavedQueryRestApi(BaseSupersetModelRestApi):
             return self.response_404()
         except SavedQueryBulkDeleteFailedError as ex:
             return self.response_422(message=str(ex))
+
+    @expose("/export/", methods=["GET"])
+    @protect()
+    @safe
+    @statsd_metrics
+    @rison(get_export_ids_schema)
+    def export(self, **kwargs: Any) -> Response:
+        """Export saved queries
+        ---
+        get:
+          description: >-
+            Exports multiple saved queries and downloads them as YAML files
+          parameters:
+          - in: query
+            name: q
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/get_export_ids_schema'
+          responses:
+            200:
+              description: A zip file with saved query(ies) and database(s) as YAML
+              content:
+                application/zip:
+                  schema:
+                    type: string
+                    format: binary
+            400:
+              $ref: '#/components/responses/400'
+            401:
+              $ref: '#/components/responses/401'
+            404:
+              $ref: '#/components/responses/404'
+            500:
+              $ref: '#/components/responses/500'
+        """
+        requested_ids = kwargs["rison"]
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        root = f"saved_query_export_{timestamp}"
+        filename = f"{root}.zip"
+
+        buf = BytesIO()
+        with ZipFile(buf, "w") as bundle:
+            try:
+                for file_name, file_content in ExportSavedQueriesCommand(
+                    requested_ids
+                ).run():
+                    with bundle.open(f"{root}/{file_name}", "w") as fp:
+                        fp.write(file_content.encode())
+            except SavedQueryNotFoundError:
+                return self.response_404()
+        buf.seek(0)
+
+        return send_file(
+            buf,
+            mimetype="application/zip",
+            as_attachment=True,
+            attachment_filename=filename,
+        )

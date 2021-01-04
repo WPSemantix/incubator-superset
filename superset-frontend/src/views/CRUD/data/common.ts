@@ -20,13 +20,7 @@ import { t } from '@superset-ui/core';
 
 export const commonMenuData = {
   name: t('Data'),
-  children: [
-    {
-      name: 'Datasets',
-      label: t('Datasets'),
-      url: '/tablemodelview/list/',
-      usesRouter: true,
-    },
+  tabs: [
     {
       name: 'Databases',
       label: t('Databases'),
@@ -34,10 +28,22 @@ export const commonMenuData = {
       usesRouter: true,
     },
     {
+      name: 'Datasets',
+      label: t('Datasets'),
+      url: '/tablemodelview/list/',
+      usesRouter: true,
+    },
+    {
       name: 'Saved Queries',
       label: t('Saved Queries'),
-      url: '/sqllab/my_queries/',
-      usesRouter: false,
+      url: '/savedqueryview/list/',
+      usesRouter: true,
+    },
+    {
+      name: 'Query History',
+      label: t('Query History'),
+      url: '/superset/sqllab/history/',
+      usesRouter: true,
     },
   ],
 };

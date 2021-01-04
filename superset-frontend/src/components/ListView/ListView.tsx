@@ -17,16 +17,16 @@
  * under the License.
  */
 import { t, styled } from '@superset-ui/core';
-import React, { useState } from 'react';
+import React, { useEffect } from 'react';
 import { Alert } from 'react-bootstrap';
 import { Empty } from 'src/common/components';
+import { ReactComponent as EmptyImage } from 'images/empty.svg';
 import cx from 'classnames';
 import Button from 'src/components/Button';
 import Icon from 'src/components/Icon';
 import IndeterminateCheckbox from 'src/components/IndeterminateCheckbox';
-import TableCollection from './TableCollection';
+import { TableCollection, Pagination } from 'src/components/dataViewCommon';
 import CardCollection from './CardCollection';
-import Pagination from './Pagination';
 import FilterControls from './Filters';
 import { CardSortSelect } from './CardSortSelect';
 import {
@@ -34,6 +34,7 @@ import {
   Filters,
   SortColumn,
   CardSortSelectOption,
+  ViewModeType,
 } from './types';
 import { ListViewError, useListViewState } from './utils';
 
@@ -42,14 +43,35 @@ const ListViewStyles = styled.div`
 
   .superset-list-view {
     text-align: left;
-    background-color: white;
     border-radius: 4px 0;
-    margin: 0 16px;
-    padding-bottom: 48px;
+    margin: 0 ${({ theme }) => theme.gridUnit * 4}px;
+
+    .header {
+      display: flex;
+      padding-bottom: ${({ theme }) => theme.gridUnit * 4}px;
+
+      .header-left {
+        display: flex;
+        flex: 5;
+      }
+      .header-right {
+        flex: 1;
+        text-align: right;
+      }
+    }
+
+    .body.empty table {
+      margin-bottom: 0;
+    }
 
     .body {
-      overflow: scroll;
-      max-height: 64vh;
+      overflow-x: auto;
+    }
+
+    .ant-empty {
+      .ant-empty-image {
+        height: auto;
+      }
     }
   }
 
@@ -57,6 +79,7 @@ const ListViewStyles = styled.div`
     display: flex;
     flex-direction: column;
     justify-content: center;
+    margin-bottom: ${({ theme }) => theme.gridUnit * 4}px;
   }
 
   .row-count-container {
@@ -70,24 +93,25 @@ const BulkSelectWrapper = styled(Alert)`
   margin-bottom: 0;
   padding-top: 0;
   padding-bottom: 0;
-  padding-right: 36px;
+  padding-right: ${({ theme }) => theme.gridUnit * 9}px;
   color: #3d3d3d;
   background-color: ${({ theme }) => theme.colors.primary.light4};
 
   .selectedCopy {
     display: inline-block;
-    padding: 16px 0;
+    padding: ${({ theme }) => theme.gridUnit * 4}px 0;
   }
 
   .deselect-all {
     color: #1985a0;
-    margin-left: 16px;
+    margin-left: ${({ theme }) => theme.gridUnit * 4}px;
   }
 
   .divider {
-    margin: -8px 0 -8px 16px;
+    margin: ${({ theme: { gridUnit } }) =>
+      `${-gridUnit * 2}px 0 ${-gridUnit * 2}px ${gridUnit * 4}px`};
     width: 1px;
-    height: 32px;
+    height: ${({ theme }) => theme.gridUnit * 8}px;
     box-shadow: inset -1px 0px 0px #dadada;
     display: inline-flex;
     vertical-align: middle;
@@ -95,7 +119,7 @@ const BulkSelectWrapper = styled(Alert)`
   }
 
   .close {
-    margin: 16px 0;
+    margin: ${({ theme }) => theme.gridUnit * 4}px 0;
   }
 `;
 
@@ -114,12 +138,8 @@ const bulkSelectColumnConfig = {
 };
 
 const ViewModeContainer = styled.div`
-  padding: ${({ theme }) => theme.gridUnit * 6}px 0px
-    ${({ theme }) => theme.gridUnit * 2}px
-    ${({ theme }) => theme.gridUnit * 4}px;
+  padding-right: ${({ theme }) => theme.gridUnit * 4}px;
   display: inline-block;
-  position: relative;
-  top: 8px;
 
   .toggle-button {
     display: inline-block;
@@ -141,7 +161,11 @@ const ViewModeContainer = styled.div`
 `;
 
 const EmptyWrapper = styled.div`
-  margin: ${({ theme }) => theme.gridUnit * 40}px 0;
+  padding: ${({ theme }) => theme.gridUnit * 40}px 0;
+
+  &.table {
+    background: ${({ theme }) => theme.colors.grayscale.light5};
+  }
 `;
 
 const ViewModeToggle = ({
@@ -179,7 +203,6 @@ const ViewModeToggle = ({
   );
 };
 
-type ViewModeType = 'card' | 'table';
 export interface ListViewProps<T extends object = any> {
   columns: any[];
   data: T[];
@@ -202,6 +225,11 @@ export interface ListViewProps<T extends object = any> {
   renderCard?: (row: T & { loading: boolean }) => React.ReactNode;
   cardSortSelectOptions?: Array<CardSortSelectOption>;
   defaultViewMode?: ViewModeType;
+  highlightRowId?: number;
+  emptyState?: {
+    message?: string;
+    slot?: React.ReactNode;
+  };
 }
 
 function ListView<T extends object = any>({
@@ -221,6 +249,8 @@ function ListView<T extends object = any>({
   renderCard,
   cardSortSelectOptions,
   defaultViewMode = 'card',
+  highlightRowId,
+  emptyState = {},
 }: ListViewProps<T>) {
   const {
     getTableProps,
@@ -233,7 +263,8 @@ function ListView<T extends object = any>({
     applyFilterValue,
     selectedFlatRows,
     toggleAllRowsSelected,
-    state: { pageIndex, pageSize, internalFilters },
+    setViewMode,
+    state: { pageIndex, pageSize, internalFilters, viewMode },
   } = useListViewState({
     bulkSelectColumnConfig,
     bulkSelectMode: bulkSelectEnabled && Boolean(bulkActions.length),
@@ -244,11 +275,13 @@ function ListView<T extends object = any>({
     initialPageSize,
     initialSort,
     initialFilters: filters,
+    renderCard: Boolean(renderCard),
+    defaultViewMode,
   });
   const filterable = Boolean(filters.length);
   if (filterable) {
     const columnAccessors = columns.reduce(
-      (acc, col) => ({ ...acc, [col.accessor || col.id]: true }),
+      (acc, col) => ({ ...acc, [col.id || col.accessor]: true }),
       {},
     );
     filters.forEach(f => {
@@ -261,35 +294,41 @@ function ListView<T extends object = any>({
   }
 
   const cardViewEnabled = Boolean(renderCard);
-  const [viewingMode, setViewingMode] = useState<ViewModeType>(
-    cardViewEnabled ? defaultViewMode : 'table',
-  );
+
+  useEffect(() => {
+    // discard selections if bulk select is disabled
+    if (!bulkSelectEnabled) toggleAllRowsSelected(false);
+  }, [bulkSelectEnabled, toggleAllRowsSelected]);
 
   return (
     <ListViewStyles>
-      <div className={`superset-list-view ${className}`}>
+      <div data-test={className} className={`superset-list-view ${className}`}>
         <div className="header">
-          {cardViewEnabled && (
-            <ViewModeToggle mode={viewingMode} setMode={setViewingMode} />
-          )}
-          {filterable && (
-            <FilterControls
-              filters={filters}
-              internalFilters={internalFilters}
-              updateFilterValue={applyFilterValue}
-            />
-          )}
-          {viewingMode === 'card' && cardSortSelectOptions && (
-            <CardSortSelect
-              initialSort={initialSort}
-              onChange={fetchData}
-              options={cardSortSelectOptions}
-              pageIndex={pageIndex}
-              pageSize={pageSize}
-            />
-          )}
+          <div className="header-left">
+            {cardViewEnabled && (
+              <ViewModeToggle mode={viewMode} setMode={setViewMode} />
+            )}
+            {filterable && (
+              <FilterControls
+                filters={filters}
+                internalFilters={internalFilters}
+                updateFilterValue={applyFilterValue}
+              />
+            )}
+          </div>
+          <div className="header-right">
+            {viewMode === 'card' && cardSortSelectOptions && (
+              <CardSortSelect
+                initialSort={initialSort}
+                onChange={fetchData}
+                options={cardSortSelectOptions}
+                pageIndex={pageIndex}
+                pageSize={pageSize}
+              />
+            )}
+          </div>
         </div>
-        <div className="body">
+        <div className={`body ${rows.length === 0 ? 'empty' : ''}`}>
           {bulkSelectEnabled && (
             <BulkSelectWrapper
               data-test="bulk-select-controls"
@@ -315,11 +354,7 @@ function ListView<T extends object = any>({
                     <Button
                       data-test="bulk-select-action"
                       key={action.key}
-                      className={cx({
-                        danger: action.type === 'danger',
-                        primary: action.type === 'primary',
-                        secondary: action.type === 'secondary',
-                      })}
+                      buttonStyle={action.type}
                       cta
                       onClick={() =>
                         action.onSelect(selectedFlatRows.map(r => r.original))
@@ -332,7 +367,7 @@ function ListView<T extends object = any>({
               )}
             </BulkSelectWrapper>
           )}
-          {viewingMode === 'card' && (
+          {viewMode === 'card' && (
             <CardCollection
               bulkSelectEnabled={bulkSelectEnabled}
               prepareRow={prepareRow}
@@ -341,7 +376,7 @@ function ListView<T extends object = any>({
               loading={loading}
             />
           )}
-          {viewingMode === 'table' && (
+          {viewMode === 'table' && (
             <TableCollection
               getTableProps={getTableProps}
               getTableBodyProps={getTableBodyProps}
@@ -350,33 +385,41 @@ function ListView<T extends object = any>({
               rows={rows}
               columns={columns}
               loading={loading}
+              highlightRowId={highlightRowId}
             />
           )}
           {!loading && rows.length === 0 && (
-            <EmptyWrapper>
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            <EmptyWrapper className={viewMode}>
+              <Empty
+                image={<EmptyImage />}
+                description={emptyState.message || 'No Data'}
+              >
+                {emptyState.slot || null}
+              </Empty>
             </EmptyWrapper>
           )}
         </div>
       </div>
 
-      <div className="pagination-container">
-        <Pagination
-          totalPages={pageCount || 0}
-          currentPage={pageCount ? pageIndex + 1 : 0}
-          onChange={(p: number) => gotoPage(p - 1)}
-          hideFirstAndLastPageLinks
-        />
-        <div className="row-count-container">
-          {!loading &&
-            t(
-              '%s-%s of %s',
-              pageSize * pageIndex + (rows.length && 1),
-              pageSize * pageIndex + rows.length,
-              count,
-            )}
+      {rows.length > 0 && (
+        <div className="pagination-container">
+          <Pagination
+            totalPages={pageCount || 0}
+            currentPage={pageCount ? pageIndex + 1 : 0}
+            onChange={(p: number) => gotoPage(p - 1)}
+            hideFirstAndLastPageLinks
+          />
+          <div className="row-count-container">
+            {!loading &&
+              t(
+                '%s-%s of %s',
+                pageSize * pageIndex + (rows.length && 1),
+                pageSize * pageIndex + rows.length,
+                count,
+              )}
+          </div>
         </div>
-      </div>
+      )}
     </ListViewStyles>
   );
 }

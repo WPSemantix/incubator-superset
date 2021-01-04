@@ -19,19 +19,13 @@
 import React from 'react';
 import { CSSTransition } from 'react-transition-group';
 import PropTypes from 'prop-types';
-import {
-  FormGroup,
-  InputGroup,
-  Form,
-  FormControl,
-  OverlayTrigger,
-  Tooltip,
-} from 'react-bootstrap';
+import { FormGroup, InputGroup, Form, FormControl } from 'react-bootstrap';
 import Split from 'react-split';
 import { t } from '@superset-ui/core';
 import debounce from 'lodash/debounce';
 import throttle from 'lodash/throttle';
 
+import { Tooltip } from 'src/common/components/Tooltip';
 import Label from 'src/components/Label';
 import Button from 'src/components/Button';
 import Checkbox from 'src/components/Checkbox';
@@ -40,7 +34,7 @@ import Hotkeys from 'src/components/Hotkeys';
 
 import LimitControl from './LimitControl';
 import TemplateParamsEditor from './TemplateParamsEditor';
-import SouthPane from './SouthPane';
+import ConnectedSouthPane from './SouthPane';
 import SaveQuery from './SaveQuery';
 import ScheduleQueryButton from './ScheduleQueryButton';
 import EstimateQueryCostButton from './EstimateQueryCostButton';
@@ -205,13 +199,21 @@ class SqlEditor extends React.PureComponent {
         name: 'runQuery1',
         key: 'ctrl+r',
         descr: t('Run query'),
-        func: this.runQuery,
+        func: () => {
+          if (this.state.sql.trim() !== '') {
+            this.runQuery();
+          }
+        },
       },
       {
         name: 'runQuery2',
         key: 'ctrl+enter',
         descr: t('Run query'),
-        func: this.runQuery,
+        func: () => {
+          if (this.state.sql.trim() !== '') {
+            this.runQuery();
+          }
+        },
       },
       {
         name: 'newTab',
@@ -260,7 +262,9 @@ class SqlEditor extends React.PureComponent {
   }
 
   handleToggleAutocompleteEnabled = () => {
-    this.setState({ autocompleteEnabled: !this.state.autocompleteEnabled });
+    this.setState(prevState => ({
+      autocompleteEnabled: !prevState.autocompleteEnabled,
+    }));
   };
 
   handleWindowResize() {
@@ -389,7 +393,7 @@ class SqlEditor extends React.PureComponent {
           />
           {this.renderEditorBottomBar(hotkeys)}
         </div>
-        <SouthPane
+        <ConnectedSouthPane
           editorQueries={this.props.editorQueries}
           latestQueryId={this.props.latestQuery && this.props.latestQuery.id}
           dataPreviewQueries={this.props.dataPreviewQueries}
@@ -412,7 +416,7 @@ class SqlEditor extends React.PureComponent {
 
       ctasControls = (
         <FormGroup>
-          <InputGroup>
+          <InputGroup bsSize="small">
             <FormControl
               type="text"
               bsSize="small"
@@ -453,20 +457,19 @@ class SqlEditor extends React.PureComponent {
       this.props.latestQuery.results &&
       this.props.latestQuery.results.displayLimitReached
     ) {
-      const tooltip = (
-        <Tooltip id="tooltip">
-          {t(
+      limitWarning = (
+        <Tooltip
+          id="tooltip"
+          placement="left"
+          title={t(
             `It appears that the number of rows in the query results displayed
            was limited on the server side to
            the %s limit.`,
             this.props.latestQuery.rows,
           )}
-        </Tooltip>
-      );
-      limitWarning = (
-        <OverlayTrigger placement="left" overlay={tooltip}>
+        >
           <Label bsStyle="warning">LIMIT</Label>
-        </OverlayTrigger>
+        </Tooltip>
       );
     }
     const successful =
@@ -527,9 +530,7 @@ class SqlEditor extends React.PureComponent {
             <span>
               <SaveQuery
                 query={qe}
-                defaultLabel={
-                  qe.description == null ? qe.title : qe.description
-                }
+                defaultLabel={qe.title || qe.description}
                 onSave={this.props.actions.saveQuery}
                 onUpdate={this.props.actions.updateSavedQuery}
                 saveQueryWarning={this.props.saveQueryWarning}
@@ -558,20 +559,22 @@ class SqlEditor extends React.PureComponent {
         </div>
         <div className="rightItems">
           <Button
-            className="autocomplete"
+            data-test="autocomplete"
             buttonSize="small"
             onClick={this.handleToggleAutocompleteEnabled}
           >
             <Checkbox checked={this.state.autocompleteEnabled} />{' '}
             {t('Autocomplete')}
           </Button>{' '}
-          <TemplateParamsEditor
-            language="json"
-            onChange={params => {
-              this.props.actions.queryEditorSetTemplateParams(qe, params);
-            }}
-            code={qe.templateParams}
-          />
+          {isFeatureEnabled(FeatureFlag.ENABLE_TEMPLATE_PROCESSING) && (
+            <TemplateParamsEditor
+              language="json"
+              onChange={params => {
+                this.props.actions.queryEditorSetTemplateParams(qe, params);
+              }}
+              code={qe.templateParams}
+            />
+          )}
           {limitWarning}
           {this.props.latestQuery && (
             <Timer

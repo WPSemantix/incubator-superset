@@ -19,10 +19,9 @@
 /* eslint-disable no-unused-expressions */
 import React from 'react';
 import sinon from 'sinon';
-import { styledShallow as shallow } from 'spec/helpers/theming';
-import { OverlayTrigger } from 'react-bootstrap';
+import { shallow } from 'enzyme';
+import Popover from 'src/common/components/Popover';
 
-import Label from 'src/components/Label';
 import AdhocFilter, {
   EXPRESSION_TYPES,
   CLAUSES,
@@ -46,22 +45,17 @@ function setup(overrides) {
     datasource: {},
     ...overrides,
   };
-  const wrapper = shallow(<AdhocFilterOption {...props} />).dive();
+  const wrapper = shallow(<AdhocFilterOption {...props} />);
   return { wrapper };
 }
 
 describe('AdhocFilterOption', () => {
   it('renders an overlay trigger wrapper for the label', () => {
     const { wrapper } = setup();
-    const overlay = wrapper.find(OverlayTrigger);
-    expect(overlay).toHaveLength(1);
-    expect(overlay.props().defaultOverlayShown).toBe(false);
-    expect(wrapper.find(Label)).toExist();
-  });
-  it('should open new filter popup by default', () => {
-    const { wrapper } = setup({
-      adhocFilter: simpleAdhocFilter.duplicateWith({ isNew: true }),
-    });
-    expect(wrapper.find(OverlayTrigger).props().defaultOverlayShown).toBe(true);
+    const overlay = wrapper.find('AdhocFilterPopoverTrigger').shallow();
+    const popover = overlay.find(Popover);
+    expect(popover).toHaveLength(1);
+    expect(popover.props().defaultVisible).toBe(false);
+    expect(overlay.find('DraggableOptionControlLabel')).toExist();
   });
 });

@@ -47,6 +47,7 @@ const {
   nameChunks = false,
 } = parsedArgs;
 const isDevMode = mode !== 'production';
+const isDevServer = process.argv[1].includes('webpack-dev-server');
 
 const output = {
   path: BUILD_DIR,
@@ -78,7 +79,7 @@ const plugins = [
       //   }
       // }
       const entryFiles = {};
-      for (const [entry, chunks] of Object.entries(entrypoints)) {
+      Object.entries(entrypoints).forEach(([entry, chunks]) => {
         entryFiles[entry] = {
           css: chunks
             .filter(x => x.endsWith('.css'))
@@ -87,23 +88,16 @@ const plugins = [
             .filter(x => x.endsWith('.js'))
             .map(x => path.join(output.publicPath, x)),
         };
-      }
+      });
+
       return {
         ...seed,
         entrypoints: entryFiles,
       };
     },
-    // Also write to disk when using devServer
-    // instead of only keeping manifest.json in memory
-    // This is required to make devServer work with flask.
-    writeToFileEmit: isDevMode,
-  }),
-
-  // create fresh dist/ upon build
-  new CleanWebpackPlugin({
-    dry: false,
-    // required because the build directory is outside the frontend directory:
-    dangerouslyAllowCleanPatternsOutsideProject: true,
+    // Also write maniafest.json to disk when running `npm run dev`.
+    // This is required for Flask to work.
+    writeToFileEmit: isDevMode && !isDevServer,
   }),
 
   // expose mode variable to other modules
@@ -115,6 +109,7 @@ const plugins = [
   new ForkTsCheckerWebpackPlugin({
     eslint: true,
     checkSyntacticErrors: true,
+    memoryLimit: 4096,
   }),
 
   new CopyPlugin({
@@ -125,9 +120,21 @@ const plugins = [
     ],
   }),
 ];
+
 if (!process.env.CI) {
   plugins.push(new webpack.ProgressPlugin());
 }
+
+// clean up built assets if not from dev-server
+if (!isDevServer) {
+  plugins.push(
+    new CleanWebpackPlugin({
+      // required because the build directory is outside the frontend directory:
+      dangerouslyAllowCleanPatternsOutsideProject: true,
+    }),
+  );
+}
+
 if (!isDevMode) {
   // text loading (webpack 4+)
   plugins.push(
@@ -264,12 +271,19 @@ const config = {
     },
   },
   resolve: {
+    modules: [APP_DIR, 'node_modules'],
     alias: {
-      src: path.resolve(APP_DIR, './src'),
       'react-dom': '@hot-loader/react-dom',
-      stylesheets: path.resolve(APP_DIR, './stylesheets'),
-      images: path.resolve(APP_DIR, './images'),
-      spec: path.resolve(APP_DIR, './spec'),
+      // force using absolute import path of the @superset-ui/core and @superset-ui/chart-controls
+      // so that we can `npm link` viz plugins without linking these two base packages
+      '@superset-ui/core': path.resolve(
+        APP_DIR,
+        './node_modules/@superset-ui/core',
+      ),
+      '@superset-ui/chart-controls': path.resolve(
+        APP_DIR,
+        './node_modules/@superset-ui/chart-controls',
+      ),
     },
     extensions: ['.ts', '.tsx', '.js', '.jsx'],
     symlinks: false,
@@ -381,10 +395,16 @@ const config = {
       {
         test: /\.woff(2)?(\?v=[0-9]\.[0-9]\.[0-9])?$/,
         loader: 'url-loader?limit=10000&mimetype=application/font-woff',
+        options: {
+          esModule: false,
+        },
       },
       {
         test: /\.(ttf|eot|svg)(\?v=[0-9]\.[0-9]\.[0-9])?$/,
         loader: 'file-loader',
+        options: {
+          esModule: false,
+        },
       },
     ],
   },
@@ -430,7 +450,7 @@ if (isDevMode) {
 
   // find all the symlinked plugins and use their source code for imports
   let hasSymlink = false;
-  for (const [pkg, version] of Object.entries(packageConfig.dependencies)) {
+  Object.entries(packageConfig.dependencies).forEach(([pkg, version]) => {
     const srcPath = `./node_modules/${pkg}/src`;
     if (/superset-ui/.test(pkg) && fs.existsSync(srcPath)) {
       console.log(
@@ -441,7 +461,7 @@ if (isDevMode) {
       config.resolve.alias[`${pkg}$`] = `${pkg}/src`;
       hasSymlink = true;
     }
-  }
+  });
   if (hasSymlink) {
     console.log(''); // pure cosmetic new line
   }

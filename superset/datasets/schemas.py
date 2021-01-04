@@ -20,6 +20,7 @@ from flask_babel import lazy_gettext as _
 from marshmallow import fields, Schema, ValidationError
 from marshmallow.validate import Length
 
+get_delete_ids_schema = {"type": "array", "items": {"type": "integer"}}
 get_export_ids_schema = {"type": "array", "items": {"type": "integer"}}
 
 
@@ -52,6 +53,7 @@ class DatasetColumnsPutSchema(Schema):
     python_date_format = fields.String(
         allow_none=True, validate=[Length(1, 255), validate_python_date_format]
     )
+    uuid = fields.String(allow_none=True)
 
 
 class DatasetMetricsPutSchema(Schema):
@@ -73,6 +75,7 @@ class DatasetPostSchema(Schema):
 
 class DatasetPutSchema(Schema):
     table_name = fields.String(allow_none=True, validate=Length(1, 250))
+    database_id = fields.Integer()
     sql = fields.String(allow_none=True)
     filter_select_enabled = fields.Boolean(allow_none=True)
     fetch_values_predicate = fields.String(allow_none=True, validate=Length(0, 1000))
@@ -87,6 +90,7 @@ class DatasetPutSchema(Schema):
     owners = fields.List(fields.Integer())
     columns = fields.List(fields.Nested(DatasetColumnsPutSchema))
     metrics = fields.List(fields.Nested(DatasetMetricsPutSchema))
+    extra = fields.String(allow_none=True)
 
 
 class DatasetRelatedChart(Schema):
@@ -119,3 +123,49 @@ class DatasetRelatedDashboards(Schema):
 class DatasetRelatedObjectsResponse(Schema):
     charts = fields.Nested(DatasetRelatedCharts)
     dashboards = fields.Nested(DatasetRelatedDashboards)
+
+
+class ImportV1ColumnSchema(Schema):
+    column_name = fields.String(required=True)
+    verbose_name = fields.String(allow_none=True)
+    is_dttm = fields.Boolean(default=False, allow_none=True)
+    is_active = fields.Boolean(default=True, allow_none=True)
+    type = fields.String(allow_none=True)
+    groupby = fields.Boolean()
+    filterable = fields.Boolean()
+    expression = fields.String(allow_none=True)
+    description = fields.String(allow_none=True)
+    python_date_format = fields.String(allow_none=True)
+
+
+class ImportV1MetricSchema(Schema):
+    metric_name = fields.String(required=True)
+    verbose_name = fields.String(allow_none=True)
+    metric_type = fields.String(allow_none=True)
+    expression = fields.String(required=True)
+    description = fields.String(allow_none=True)
+    d3format = fields.String(allow_none=True)
+    extra = fields.Dict(allow_none=True)
+    warning_text = fields.String(allow_none=True)
+
+
+class ImportV1DatasetSchema(Schema):
+    table_name = fields.String(required=True)
+    main_dttm_col = fields.String(allow_none=True)
+    description = fields.String(allow_none=True)
+    default_endpoint = fields.String(allow_none=True)
+    offset = fields.Integer()
+    cache_timeout = fields.Integer(allow_none=True)
+    schema = fields.String(allow_none=True)
+    sql = fields.String(allow_none=True)
+    params = fields.Dict(allow_none=True)
+    template_params = fields.Dict(allow_none=True)
+    filter_select_enabled = fields.Boolean()
+    fetch_values_predicate = fields.String(allow_none=True)
+    extra = fields.Dict(allow_none=True)
+    uuid = fields.UUID(required=True)
+    columns = fields.List(fields.Nested(ImportV1ColumnSchema))
+    metrics = fields.List(fields.Nested(ImportV1MetricSchema))
+    version = fields.String(required=True)
+    database_uuid = fields.UUID(required=True)
+    data = fields.URL()

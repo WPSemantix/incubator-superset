@@ -21,7 +21,7 @@ import {
   getTimeFormatter,
   TimeFormats,
 } from '@superset-ui/core';
-import getClientErrorObject from './getClientErrorObject';
+import { getClientErrorObject } from './getClientErrorObject';
 
 // ATTENTION: If you change any constants, make sure to also change constants.py
 
@@ -80,14 +80,6 @@ export function getShortUrl(longUrl) {
         Promise.reject(error || statusText),
       ),
     );
-}
-
-export function supersetURL(rootUrl, getParams = {}) {
-  const url = new URL(rootUrl, window.location.origin);
-  for (const k in getParams) {
-    url.searchParams.set(k, getParams[k]);
-  }
-  return url.href;
 }
 
 export function optionLabel(opt) {

@@ -18,11 +18,11 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { ButtonGroup, OverlayTrigger, Tooltip } from 'react-bootstrap';
+import { ButtonGroup } from 'react-bootstrap';
 import { t, styled } from '@superset-ui/core';
 
+import { Tooltip } from 'src/common/components/Tooltip';
 import Button from 'src/components/Button';
-import Hotkeys from '../../components/Hotkeys';
 
 const propTypes = {
   canAdd: PropTypes.bool.isRequired,
@@ -37,28 +37,16 @@ const propTypes = {
 const defaultProps = {
   onStop: () => {},
   onSave: () => {},
-  disabled: false,
 };
-
-// Prolly need to move this to a global context
-const keymap = {
-  RUN: 'ctrl + r, ctrl + enter',
-  SAVE: 'ctrl + s',
-};
-
-const getHotKeys = () =>
-  Object.keys(keymap).map(k => ({
-    name: k,
-    descr: keymap[k],
-    key: k,
-  }));
 
 const Styles = styled.div`
   display: flex;
+  flex-shrink: 0;
   flex-direction: row;
   align-items: center;
-  padding-bottom: ${({ theme }) => 2 * theme.gridUnit}px;
-
+  padding: ${({ theme }) => 2 * theme.gridUnit}px
+    ${({ theme }) => 2 * theme.gridUnit}px 0
+    ${({ theme }) => 4 * theme.gridUnit}px;
   .btn {
     /* just to make sure buttons don't jiggle */
     width: 100px;
@@ -74,7 +62,7 @@ export default function QueryAndSaveBtns({
   chartIsStale,
   errorMessage,
 }) {
-  let qryButtonStyle = 'secondary';
+  let qryButtonStyle = 'tertiary';
   if (errorMessage) {
     qryButtonStyle = 'danger';
   } else if (chartIsStale) {
@@ -89,7 +77,7 @@ export default function QueryAndSaveBtns({
       buttonSize="small"
       disabled={!canAdd}
     >
-      <i className="fa fa-stop-circle-o" /> Stop
+      <i className="fa fa-stop-circle-o" /> {t('Stop')}
     </Button>
   ) : (
     <Button
@@ -109,36 +97,29 @@ export default function QueryAndSaveBtns({
         <ButtonGroup className="query-and-save">
           {qryOrStopButton}
           <Button
-            buttonStyle="secondary"
+            buttonStyle="tertiary"
             buttonSize="small"
             data-target="#save_modal"
             data-toggle="modal"
             disabled={saveButtonDisabled}
             onClick={onSave}
+            data-test="query-save-button"
           >
-            <i className="fa fa-plus-circle" /> Save
+            <i className="fa fa-plus-circle" /> {t('Save')}
           </Button>
         </ButtonGroup>
         {errorMessage && (
           <span>
             {' '}
-            <OverlayTrigger
+            <Tooltip
+              id="query-error-tooltip"
               placement="right"
-              overlay={
-                <Tooltip id="query-error-tooltip">{errorMessage}</Tooltip>
-              }
+              title={errorMessage}
             >
               <i className="fa fa-exclamation-circle text-danger fa-lg" />
-            </OverlayTrigger>
+            </Tooltip>
           </span>
         )}
-      </div>
-      <div className="m-l-5 text-muted">
-        <Hotkeys
-          header="Keyboard shortcuts"
-          hotkeys={getHotKeys()}
-          placement="right"
-        />
       </div>
     </Styles>
   );

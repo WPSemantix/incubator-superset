@@ -26,12 +26,20 @@ import simplejson as json
 from flask import g, request
 from flask_appbuilder.security.sqla import models as ab_models
 from flask_appbuilder.security.sqla.models import User
+from flask_babel import gettext as __
+from sqlalchemy.orm.exc import NoResultFound
 
 import superset.models.core as models
 from superset import app, dataframe, db, is_feature_enabled, result_set
 from superset.connectors.connector_registry import ConnectorRegistry
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
-from superset.exceptions import SupersetException, SupersetSecurityException
+from superset.exceptions import (
+    CacheLoadError,
+    SerializationError,
+    SupersetException,
+    SupersetSecurityException,
+)
+from superset.extensions import cache_manager
 from superset.legacy import update_time_range
 from superset.models.core import Database
 from superset.models.dashboard import Dashboard
@@ -102,13 +110,19 @@ def get_permissions(
 
 
 def get_viz(
-    form_data: FormData, datasource_type: str, datasource_id: int, force: bool = False
+    form_data: FormData,
+    datasource_type: str,
+    datasource_id: int,
+    force: bool = False,
+    force_cached: bool = False,
 ) -> BaseViz:
     viz_type = form_data.get("viz_type", "table")
     datasource = ConnectorRegistry.get_datasource(
         datasource_type, datasource_id, db.session
     )
-    viz_obj = viz.viz_types[viz_type](datasource, form_data=form_data, force=force)
+    viz_obj = viz.viz_types[viz_type](
+        datasource, form_data=form_data, force=force, force_cached=force_cached
+    )
     return viz_obj
 
 
@@ -349,11 +363,11 @@ def build_extra_filters(  # pylint: disable=too-many-locals,too-many-nested-bloc
     for filter_id, columns in default_filters.items():
         filter_slice = db.session.query(Slice).filter_by(id=filter_id).one_or_none()
 
-        filter_configs = (
-            json.loads(filter_slice.params or "{}").get("filter_configs") or []
-            if filter_slice
-            else []
-        )
+        filter_configs: List[Dict[str, Any]] = []
+        if filter_slice:
+            filter_configs = (
+                json.loads(filter_slice.params or "{}").get("filter_configs") or []
+            )
 
         scopes_by_filter_field = filter_scopes.get(filter_id, {})
         for col, val in columns.items():
@@ -416,10 +430,26 @@ def is_owner(obj: Union[Dashboard, Slice], user: User) -> bool:
     return obj and user in obj.owners
 
 
+def check_explore_cache_perms(_self: Any, cache_key: str) -> None:
+    """
+    Loads async explore_json request data from cache and performs access check
+
+    :param _self: the Superset view instance
+    :param cache_key: the cache key passed into /explore_json/data/
+    :raises SupersetSecurityException: If the user cannot access the resource
+    """
+    cached = cache_manager.cache.get(cache_key)
+    if not cached:
+        raise CacheLoadError("Cached data not found")
+
+    check_datasource_perms(_self, form_data=cached["form_data"])
+
+
 def check_datasource_perms(
     _self: Any,
     datasource_type: Optional[str] = None,
     datasource_id: Optional[int] = None,
+    **kwargs: Any
 ) -> None:
     """
     Check if user can access a cached response from explore_json.
@@ -432,7 +462,7 @@ def check_datasource_perms(
     :raises SupersetSecurityException: If the user cannot access the resource
     """
 
-    form_data = get_form_data()[0]
+    form_data = kwargs["form_data"] if "form_data" in kwargs else get_form_data()[0]
 
     try:
         datasource_id, datasource_type = get_datasource_info(
@@ -452,16 +482,25 @@ def check_datasource_perms(
             SupersetError(
                 error_type=SupersetErrorType.UNKNOWN_DATASOURCE_TYPE_ERROR,
                 level=ErrorLevel.ERROR,
-                message="Could not determine datasource type",
+                message=__("Could not determine datasource type"),
             )
         )
 
-    viz_obj = get_viz(
-        datasource_type=datasource_type,
-        datasource_id=datasource_id,
-        form_data=form_data,
-        force=False,
-    )
+    try:
+        viz_obj = get_viz(
+            datasource_type=datasource_type,
+            datasource_id=datasource_id,
+            form_data=form_data,
+            force=False,
+        )
+    except NoResultFound:
+        raise SupersetSecurityException(
+            SupersetError(
+                error_type=SupersetErrorType.UNKNOWN_DATASOURCE_TYPE_ERROR,
+                level=ErrorLevel.ERROR,
+                message=__("Could not find viz object"),
+            )
+        )
 
     viz_obj.raise_for_access()
 
@@ -480,12 +519,21 @@ def check_slice_perms(_self: Any, slice_id: int) -> None:
     form_data, slc = get_form_data(slice_id, use_slice_data=True)
 
     if slc:
-        viz_obj = get_viz(
-            datasource_type=slc.datasource.type,
-            datasource_id=slc.datasource.id,
-            form_data=form_data,
-            force=False,
-        )
+        try:
+            viz_obj = get_viz(
+                datasource_type=slc.datasource.type,
+                datasource_id=slc.datasource.id,
+                form_data=form_data,
+                force=False,
+            )
+        except NoResultFound:
+            raise SupersetSecurityException(
+                SupersetError(
+                    error_type=SupersetErrorType.UNKNOWN_DATASOURCE_TYPE_ERROR,
+                    level=ErrorLevel.ERROR,
+                    message="Could not find viz object",
+                )
+            )
 
         viz_obj.raise_for_access()
 
@@ -501,7 +549,10 @@ def _deserialize_results_payload(
             ds_payload = msgpack.loads(payload, raw=False)
 
         with stats_timing("sqllab.query.results_backend_pa_deserialize", stats_logger):
-            pa_table = pa.deserialize(ds_payload["data"])
+            try:
+                pa_table = pa.deserialize(ds_payload["data"])
+            except pa.ArrowSerializationError:
+                raise SerializationError("Unable to deserialize table")
 
         df = result_set.SupersetResultSet.convert_table_to_df(pa_table)
         ds_payload["data"] = dataframe.df_to_records(df) or []

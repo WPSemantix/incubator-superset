@@ -19,7 +19,7 @@
 /* eslint camelcase: 0 */
 import { getChartControlPanelRegistry } from '@superset-ui/core';
 import { getAllControlsState, getFormDataFromControls } from './controlUtils';
-import controls from './controls';
+import { controls } from './controls';
 
 function handleDeprecatedControls(formData) {
   // Reacffectation / handling of deprecated controls
@@ -69,16 +69,16 @@ export function applyDefaultFormData(inputFormData) {
   const controlFormData = getFormDataFromControls(controlsState);
 
   const formData = {};
-  Object.keys(controlsState).forEach(controlName => {
-    if (inputFormData[controlName] === undefined) {
-      formData[controlName] = controlFormData[controlName];
-    } else {
-      formData[controlName] = inputFormData[controlName];
-    }
-  });
+  Object.keys(controlsState)
+    .concat(Object.keys(inputFormData))
+    .forEach(controlName => {
+      if (inputFormData[controlName] === undefined) {
+        formData[controlName] = controlFormData[controlName];
+      } else {
+        formData[controlName] = inputFormData[controlName];
+      }
+    });
 
-  // always use dynamically generated queryFields
-  formData.queryFields = controlFormData.queryFields;
   return formData;
 }
 

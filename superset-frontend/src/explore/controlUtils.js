@@ -22,13 +22,10 @@ import { expandControlConfig } from '@superset-ui/chart-controls';
 import * as SECTIONS from './controlPanels/sections';
 
 export function getFormDataFromControls(controlsState) {
-  const formData = { queryFields: {} };
+  const formData = {};
   Object.keys(controlsState).forEach(controlName => {
     const control = controlsState[controlName];
     formData[controlName] = control.value;
-    if (control.hasOwnProperty('queryField')) {
-      formData.queryFields[controlName] = control.queryField;
-    }
   });
   return formData;
 }
@@ -51,40 +48,40 @@ export function validateControl(control, processedState) {
 /**
  * Find control item from control panel config.
  */
-function findControlItem(controlPanelSections, controlKey) {
-  for (const section of controlPanelSections) {
-    for (const controlArr of section.controlSetRows) {
-      for (const control of controlArr) {
-        if (controlKey === control) return control;
-        if (
-          control !== null &&
-          typeof control === 'object' &&
-          control.name === controlKey
-        ) {
-          return control;
-        }
-      }
-    }
-  }
-  return null;
+export function findControlItem(controlPanelSections, controlKey) {
+  return (
+    controlPanelSections
+      .map(section => section.controlSetRows)
+      .flat(2)
+      .find(
+        control =>
+          controlKey === control ||
+          (control !== null &&
+            typeof control === 'object' &&
+            control.name === controlKey),
+      ) ?? null
+  );
 }
 
-export const getControlConfig = memoizeOne(function getControlConfig(
-  controlKey,
-  vizType,
-) {
-  const controlPanelConfig = getChartControlPanelRegistry().get(vizType) || {};
-  const {
-    controlOverrides = {},
-    controlPanelSections = [],
-  } = controlPanelConfig;
+const getMemoizedControlConfig = memoizeOne(
+  (controlKey, controlPanelConfig) => {
+    const {
+      controlOverrides = {},
+      controlPanelSections = [],
+    } = controlPanelConfig;
 
-  const control = expandControlConfig(
-    findControlItem(controlPanelSections, controlKey),
-    controlOverrides,
-  );
-  return control?.config || control;
-});
+    const control = expandControlConfig(
+      findControlItem(controlPanelSections, controlKey),
+      controlOverrides,
+    );
+    return control?.config || control;
+  },
+);
+
+export const getControlConfig = function getControlConfig(controlKey, vizType) {
+  const controlPanelConfig = getChartControlPanelRegistry().get(vizType) || {};
+  return getMemoizedControlConfig(controlKey, controlPanelConfig);
+};
 
 function handleMissingChoice(control) {
   // If the value is not valid anymore based on choices, clear it
@@ -170,53 +167,64 @@ export function getControlState(controlKey, vizType, state, value) {
   );
 }
 
+const getMemoizedSectionsToRender = memoizeOne(
+  (datasourceType, controlPanelConfig) => {
+    const {
+      sectionOverrides = {},
+      controlOverrides,
+      controlPanelSections = [],
+    } = controlPanelConfig;
+
+    // default control panel sections
+    const sections = { ...SECTIONS };
+
+    // apply section overrides
+    Object.entries(sectionOverrides).forEach(([section, overrides]) => {
+      if (typeof overrides === 'object' && overrides.constructor === Object) {
+        sections[section] = {
+          ...sections[section],
+          ...overrides,
+        };
+      } else {
+        sections[section] = overrides;
+      }
+    });
+
+    const { datasourceAndVizType } = sections;
+    // list of datasource-specific controls that should be removed
+    const invalidControls =
+      datasourceType === 'table'
+        ? ['granularity', 'druid_time_origin']
+        : ['granularity_sqla', 'time_grain_sqla'];
+
+    return []
+      .concat(datasourceAndVizType, controlPanelSections)
+      .filter(section => !!section)
+      .map(section => {
+        const { controlSetRows } = section;
+        return {
+          ...section,
+          controlSetRows:
+            controlSetRows?.map(row =>
+              row
+                .filter(control => !invalidControls.includes(control))
+                .map(item => expandControlConfig(item, controlOverrides)),
+            ) || [],
+        };
+      });
+  },
+);
+
 /**
  * Get the clean and processed control panel sections
  */
-export const sectionsToRender = memoizeOne(function sectionsToRender(
+export const sectionsToRender = function sectionsToRender(
   vizType,
   datasourceType,
 ) {
   const controlPanelConfig = getChartControlPanelRegistry().get(vizType) || {};
-  const {
-    sectionOverrides = {},
-    controlOverrides,
-    controlPanelSections = [],
-  } = controlPanelConfig;
-
-  // default control panel sections
-  const sections = { ...SECTIONS };
-
-  // apply section overrides
-  Object.entries(sectionOverrides).forEach(([section, overrides]) => {
-    if (typeof overrides === 'object' && overrides.constructor === Object) {
-      sections[section] = {
-        ...sections[section],
-        ...overrides,
-      };
-    } else {
-      sections[section] = overrides;
-    }
-  });
-
-  const { datasourceAndVizType, sqlaTimeSeries, druidTimeSeries } = sections;
-  const timeSection =
-    datasourceType === 'table' ? sqlaTimeSeries : druidTimeSeries;
-
-  return []
-    .concat(datasourceAndVizType, timeSection, controlPanelSections)
-    .filter(section => !!section)
-    .map(section => {
-      const { controlSetRows } = section;
-      return {
-        ...section,
-        controlSetRows:
-          controlSetRows?.map(row =>
-            row.map(item => expandControlConfig(item, controlOverrides)),
-          ) || [],
-      };
-    });
-});
+  return getMemoizedSectionsToRender(datasourceType, controlPanelConfig);
+};
 
 export function getAllControlsState(vizType, datasourceType, state, formData) {
   const controlsState = {};

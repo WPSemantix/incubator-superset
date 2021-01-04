@@ -78,10 +78,14 @@ export default class TextAreaControl extends React.Component {
     const value = this.props.value || '';
     const minLines = inModal ? 40 : this.props.minLines || 12;
     if (this.props.language) {
+      const style = { border: '1px solid #CCC' };
+      if (this.props.readOnly) {
+        style.backgroundColor = '#f2f2f2';
+      }
       return (
         <TextAreaEditor
           mode={this.props.language}
-          style={{ border: '1px solid #CCC' }}
+          style={style}
           minLines={minLines}
           maxLines={inModal ? 1000 : this.props.maxLines}
           onChange={this.onAceChangeDebounce}
@@ -124,7 +128,6 @@ export default class TextAreaControl extends React.Component {
         {this.renderEditor()}
         {this.props.offerEditInModal && (
           <ModalTrigger
-            bsSize="large"
             modalTitle={controlHeader}
             triggerNode={
               <Button buttonSize="small" className="m-t-5">
@@ -133,6 +136,7 @@ export default class TextAreaControl extends React.Component {
               </Button>
             }
             modalBody={this.renderModalBody(true)}
+            responsive
           />
         )}
       </div>

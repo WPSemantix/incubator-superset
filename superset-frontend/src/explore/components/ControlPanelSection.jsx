@@ -20,6 +20,7 @@ import React from 'react';
 import PropTypes from 'prop-types';
 import { Panel } from 'react-bootstrap';
 import { InfoTooltipWithTrigger } from '@superset-ui/chart-controls';
+import { styled } from '@superset-ui/core';
 
 const propTypes = {
   label: PropTypes.string,
@@ -36,6 +37,14 @@ const defaultProps = {
   hasErrors: false,
 };
 
+const StyledPanelTitle = styled(Panel.Title)`
+  & > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+`;
+
 export default class ControlPanelSection extends React.Component {
   constructor(props) {
     super(props);
@@ -44,7 +53,7 @@ export default class ControlPanelSection extends React.Component {
   }
 
   toggleExpand() {
-    this.setState({ expanded: !this.state.expanded });
+    this.setState(prevState => ({ expanded: !prevState.expanded }));
   }
 
   renderHeader() {
@@ -53,7 +62,12 @@ export default class ControlPanelSection extends React.Component {
       label && (
         <div>
           <span>
-            <span role="button" tabIndex={0} onClick={this.toggleExpand}>
+            <span
+              data-test="clickable-control-panel-section-title"
+              role="button"
+              tabIndex={0}
+              onClick={this.toggleExpand}
+            >
               {label}
             </span>{' '}
             {description && (
@@ -89,7 +103,7 @@ export default class ControlPanelSection extends React.Component {
         onToggle={this.toggleExpand}
       >
         <Panel.Heading>
-          <Panel.Title>{this.renderHeader()}</Panel.Title>
+          <StyledPanelTitle>{this.renderHeader()}</StyledPanelTitle>
         </Panel.Heading>
         <Panel.Collapse>
           <Panel.Body>{this.props.children}</Panel.Body>

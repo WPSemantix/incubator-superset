@@ -19,12 +19,12 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { shallow } from 'enzyme';
-import { Navbar, MenuItem } from 'react-bootstrap';
+import { Navbar } from 'react-bootstrap';
 import SubMenu from 'src/components/Menu/SubMenu';
 
 const defaultProps = {
   name: 'Title',
-  children: [
+  tabs: [
     {
       name: 'Page1',
       label: 'Page1',
@@ -66,7 +66,7 @@ describe('SubMenu', () => {
   });
 
   it('renders 3 MenuItems (when usesRouter === false)', () => {
-    expect(wrapper.find(MenuItem)).toHaveLength(3);
+    expect(wrapper.find('li')).toHaveLength(3);
   });
 
   it('renders the menu title', () => {
@@ -83,6 +83,26 @@ describe('SubMenu', () => {
 
     expect(routerWrapper.find(Link)).toExist();
     expect(routerWrapper.find(Link)).toHaveLength(2);
-    expect(routerWrapper.find(MenuItem)).toHaveLength(1);
+    expect(routerWrapper.find('li.no-router')).toHaveLength(1);
+  });
+
+  it('renders buttons in the right nav of the submenu', () => {
+    const mockFunc = jest.fn();
+    const buttons = [
+      {
+        name: 'test_button',
+        onClick: mockFunc,
+        buttonStyle: 'primary',
+      },
+      {
+        name: 'danger_button',
+        buttonStyle: 'danger',
+      },
+    ];
+    const overrideProps = { buttons };
+    const newWrapper = getWrapper(overrideProps);
+    expect(newWrapper.find('.navbar-right').children()).toHaveLength(2);
+    newWrapper.find('[buttonStyle="primary"]').simulate('click');
+    expect(mockFunc).toHaveBeenCalled();
   });
 });

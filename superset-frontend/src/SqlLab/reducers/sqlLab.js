@@ -324,6 +324,10 @@ export default function sqlLabReducer(state = {}, action) {
       });
     },
     [actions.QUERY_SUCCESS]() {
+      // prevent race condition were query succeeds shortly after being canceled
+      if (action.query.state === 'stopped') {
+        return state;
+      }
       const alts = {
         endDttm: now(),
         progress: 100,
@@ -493,8 +497,7 @@ export default function sqlLabReducer(state = {}, action) {
       // Fetch the updates to the queries present in the store.
       let change = false;
       let { queriesLastUpdate } = state;
-      for (const id in action.alteredQueries) {
-        const changedQuery = action.alteredQueries[id];
+      Object.entries(action.alteredQueries).forEach(([id, changedQuery]) => {
         if (
           !state.queries.hasOwnProperty(id) ||
           (state.queries[id].state !== 'stopped' &&
@@ -506,7 +509,7 @@ export default function sqlLabReducer(state = {}, action) {
           newQueries[id] = { ...state.queries[id], ...changedQuery };
           change = true;
         }
-      }
+      });
       if (!change) {
         newQueries = state.queries;
       }

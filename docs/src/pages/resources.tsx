@@ -41,8 +41,16 @@ const learningLinks = [
 
 const installationLinks = [
   [
+    'Official Apache releases',
+    'https://dist.apache.org/repos/dist/release/incubator/superset/',
+  ],
+  [
     'Locally with Docker',
     'https://superset.incubator.apache.org/installation.html#start-with-docker',
+  ],
+  [
+    'Superset on the Python Package Index (PyPI)',
+    'https://dist.apache.org/repos/dist/release/incubator/superset/',
   ],
   [
     'Install on CentOS',
@@ -51,6 +59,10 @@ const installationLinks = [
   [
     'Build Apache Superset from source',
     'https://hackernoon.com/a-better-guide-to-build-apache-superset-from-source-6f2ki32n0',
+  ],
+  [
+    'Installing Apache Superset on IBM Kubernetes Cluster',
+    'https://aklin.github.io/guides/kubernetes/2020/10/05/ibm-superset-guide/',
   ],
 ];
 
@@ -97,7 +109,7 @@ interface featureProps {
 }
 const LinkSection = ({ title, links }: featureProps) => (
   <div className="link-section">
-    <h2>{title}</h2>
+    <h3>{title}</h3>
     <List
       size="small"
       bordered

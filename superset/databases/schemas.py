@@ -16,16 +16,19 @@
 # under the License.
 import inspect
 import json
+import urllib.parse
+from typing import Any, Dict
 
 from flask import current_app
 from flask_babel import lazy_gettext as _
-from marshmallow import fields, Schema
+from marshmallow import fields, Schema, validates_schema
 from marshmallow.validate import Length, ValidationError
 from sqlalchemy import MetaData
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import ArgumentError
 
 from superset.exceptions import CertificateException
+from superset.models.core import PASSWORD_MASK
 from superset.utils.core import markdown, parse_ssl_cert
 
 database_schemas_query_schema = {
@@ -109,6 +112,7 @@ extra_description = markdown(
     "whether or not the Explore button in SQL Lab results is shown.",
     True,
 )
+get_export_ids_schema = {"type": "array", "items": {"type": "integer"}}
 sqlalchemy_uri_description = markdown(
     "Refer to the "
     "[SqlAlchemy docs]"
@@ -130,15 +134,12 @@ def sqlalchemy_uri_validator(value: str) -> str:
     """
     try:
         make_url(value.strip())
-    except (ArgumentError, AttributeError):
+    except (ArgumentError, AttributeError, ValueError):
         raise ValidationError(
             [
                 _(
-                    "Invalid connection string, a valid string usually follows:"
-                    "'DRIVER://USER:PASSWORD@DB-HOST/DATABASE-NAME'"
-                    "<p>"
-                    "Example:'postgresql://user:password@your-postgres-db/database'"
-                    "</p>"
+                    "Invalid connection string, a valid string usually follows: "
+                    "dirver://user:password@database-host/database-name"
                 )
             ]
         )
@@ -410,3 +411,35 @@ class DatabaseRelatedDashboards(Schema):
 class DatabaseRelatedObjectsResponse(Schema):
     charts = fields.Nested(DatabaseRelatedCharts)
     dashboards = fields.Nested(DatabaseRelatedDashboards)
+
+
+class ImportV1DatabaseExtraSchema(Schema):
+    metadata_params = fields.Dict(keys=fields.Str(), values=fields.Raw())
+    engine_params = fields.Dict(keys=fields.Str(), values=fields.Raw())
+    metadata_cache_timeout = fields.Dict(keys=fields.Str(), values=fields.Integer())
+    schemas_allowed_for_csv_upload = fields.List(fields.String)
+    cost_estimate_enabled = fields.Boolean()
+
+
+class ImportV1DatabaseSchema(Schema):
+    database_name = fields.String(required=True)
+    sqlalchemy_uri = fields.String(required=True)
+    password = fields.String(allow_none=True)
+    cache_timeout = fields.Integer(allow_none=True)
+    expose_in_sqllab = fields.Boolean()
+    allow_run_async = fields.Boolean()
+    allow_ctas = fields.Boolean()
+    allow_cvas = fields.Boolean()
+    allow_csv_upload = fields.Boolean()
+    extra = fields.Nested(ImportV1DatabaseExtraSchema)
+    uuid = fields.UUID(required=True)
+    version = fields.String(required=True)
+
+    # pylint: disable=no-self-use, unused-argument
+    @validates_schema
+    def validate_password(self, data: Dict[str, Any], **kwargs: Any) -> None:
+        """If sqlalchemy_uri has a masked password, password is required"""
+        uri = data["sqlalchemy_uri"]
+        password = urllib.parse.urlparse(uri).password
+        if password == PASSWORD_MASK and data.get("password") is None:
+            raise ValidationError("Must provide a password for the database")

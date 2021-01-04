@@ -49,12 +49,14 @@ const propTypes = {
   timeout: PropTypes.number,
   vizType: PropTypes.string.isRequired,
   triggerRender: PropTypes.bool,
-  owners: PropTypes.arrayOf(PropTypes.string),
+  owners: PropTypes.arrayOf(
+    PropTypes.oneOfType([PropTypes.string, PropTypes.number]),
+  ),
   // state
   chartAlert: PropTypes.string,
   chartStatus: PropTypes.string,
   chartStackTrace: PropTypes.string,
-  queryResponse: PropTypes.object,
+  queriesResponse: PropTypes.arrayOf(PropTypes.object),
   triggerQuery: PropTypes.bool,
   refreshOverlayVisible: PropTypes.bool,
   errorMessage: PropTypes.node,
@@ -63,8 +65,6 @@ const propTypes = {
   onQuery: PropTypes.func,
   onFilterMenuOpen: PropTypes.func,
   onFilterMenuClose: PropTypes.func,
-  // id of the last mounted parent tab
-  mountedParent: PropTypes.string,
 };
 
 const BLANK = {};
@@ -81,6 +81,8 @@ const defaultProps = {
 };
 
 const Styles = styled.div`
+  position: relative;
+  height: 100%;
   .chart-tooltip {
     opacity: 0.75;
     font-size: ${({ theme }) => theme.typography.sizes.s}px;
@@ -148,14 +150,8 @@ class Chart extends React.PureComponent {
     });
   }
 
-  renderErrorMessage() {
-    const {
-      chartAlert,
-      chartStackTrace,
-      dashboardId,
-      owners,
-      queryResponse,
-    } = this.props;
+  renderErrorMessage(queryResponse) {
+    const { chartAlert, chartStackTrace, dashboardId, owners } = this.props;
 
     const error = queryResponse?.errors?.[0];
     if (error) {
@@ -163,10 +159,12 @@ class Chart extends React.PureComponent {
       extra.owners = owners;
       error.extra = extra;
     }
+    const message = chartAlert || queryResponse?.message;
     return (
       <ErrorMessageWithStackTrace
         error={error}
-        message={chartAlert || queryResponse?.message}
+        subtitle={message}
+        copyText={message}
         link={queryResponse ? queryResponse.link : null}
         source={dashboardId ? 'dashboard' : 'explore'}
         stackTrace={chartStackTrace}
@@ -183,25 +181,32 @@ class Chart extends React.PureComponent {
       errorMessage,
       onQuery,
       refreshOverlayVisible,
+      queriesResponse = [],
     } = this.props;
 
     const isLoading = chartStatus === 'loading';
-
     const isFaded = refreshOverlayVisible && !errorMessage;
     this.renderContainerStartTime = Logger.getTimestamp();
     if (chartStatus === 'failed') {
-      return this.renderErrorMessage();
+      return queriesResponse.map(item => this.renderErrorMessage(item));
     }
     if (errorMessage) {
-      return <Alert bsStyle="warning">{errorMessage}</Alert>;
+      return (
+        <Alert data-test="alert-warning" bsStyle="warning">
+          {errorMessage}
+        </Alert>
+      );
     }
     return (
       <ErrorBoundary
         onError={this.handleRenderContainerFailure}
         showMessage={false}
       >
-        <Styles className="chart-container">
-          <div className={`slice_container ${isFaded ? ' faded' : ''}`}>
+        <Styles className="chart-container" data-test="chart-container">
+          <div
+            className={`slice_container ${isFaded ? ' faded' : ''}`}
+            data-test="slice-container"
+          >
             <ChartRenderer {...this.props} data-test={this.props.vizType} />
           </div>
 

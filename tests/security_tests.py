@@ -15,15 +15,21 @@
 # specific language governing permissions and limitations
 # under the License.
 # isort:skip_file
+import datetime
 import inspect
+import re
 import unittest
 from unittest.mock import Mock, patch
 
+import pandas as pd
 import prison
-from flask import current_app, g
+import pytest
+import random
 
-import tests.test_app
-from superset import app, appbuilder, db, security_manager, viz
+from flask import current_app, g
+from sqlalchemy import Float, Date, String
+
+from superset import app, appbuilder, db, security_manager, viz, ConnectorRegistry
 from superset.connectors.druid.models import DruidCluster, DruidDatasource
 from superset.connectors.sqla.models import RowLevelSecurityFilter, SqlaTable
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
@@ -34,6 +40,24 @@ from superset.sql_parse import Table
 from superset.utils.core import get_example_database
 
 from .base_tests import SupersetTestCase
+from .dashboard_utils import (
+    create_table_for_dashboard,
+    create_slice,
+    create_dashboard,
+)
+from .fixtures.energy_dashboard import load_energy_table_with_slice
+from .fixtures.unicode_dashboard import load_unicode_dashboard_with_slice
+
+NEW_SECURITY_CONVERGE_VIEWS = (
+    "Annotation",
+    "Database",
+    "Dataset",
+    "Dashboard",
+    "CssTemplate",
+    "Chart",
+    "Query",
+    "SavedQuery",
+)
 
 
 def get_perm_tuples(role_name):
@@ -599,18 +623,27 @@ class TestRolePermission(SupersetTestCase):
         self.logout()
 
     def assert_can_read(self, view_menu, permissions_set):
-        self.assertIn(("can_list", view_menu), permissions_set)
+        if view_menu in NEW_SECURITY_CONVERGE_VIEWS:
+            self.assertIn(("can_read", view_menu), permissions_set)
+        else:
+            self.assertIn(("can_list", view_menu), permissions_set)
 
     def assert_can_write(self, view_menu, permissions_set):
-        self.assertIn(("can_add", view_menu), permissions_set)
-        self.assertIn(("can_delete", view_menu), permissions_set)
-        self.assertIn(("can_edit", view_menu), permissions_set)
+        if view_menu in NEW_SECURITY_CONVERGE_VIEWS:
+            self.assertIn(("can_write", view_menu), permissions_set)
+        else:
+            self.assertIn(("can_add", view_menu), permissions_set)
+            self.assertIn(("can_delete", view_menu), permissions_set)
+            self.assertIn(("can_edit", view_menu), permissions_set)
 
     def assert_cannot_write(self, view_menu, permissions_set):
-        self.assertNotIn(("can_add", view_menu), permissions_set)
-        self.assertNotIn(("can_delete", view_menu), permissions_set)
-        self.assertNotIn(("can_edit", view_menu), permissions_set)
-        self.assertNotIn(("can_save", view_menu), permissions_set)
+        if view_menu in NEW_SECURITY_CONVERGE_VIEWS:
+            self.assertNotIn(("can_write", view_menu), permissions_set)
+        else:
+            self.assertNotIn(("can_add", view_menu), permissions_set)
+            self.assertNotIn(("can_delete", view_menu), permissions_set)
+            self.assertNotIn(("can_edit", view_menu), permissions_set)
+            self.assertNotIn(("can_save", view_menu), permissions_set)
 
     def assert_can_all(self, view_menu, permissions_set):
         self.assert_can_read(view_menu, permissions_set)
@@ -620,11 +653,11 @@ class TestRolePermission(SupersetTestCase):
         self.assertIn(("menu_access", view_menu), permissions_set)
 
     def assert_can_gamma(self, perm_set):
-        self.assert_can_read("TableModelView", perm_set)
+        self.assert_can_read("Dataset", perm_set)
 
         # make sure that user can create slices and dashboards
-        self.assert_can_all("SliceModelView", perm_set)
-        self.assert_can_all("DashboardModelView", perm_set)
+        self.assert_can_all("Dashboard", perm_set)
+        self.assert_can_all("Chart", perm_set)
 
         self.assertIn(("can_add_slices", "Superset"), perm_set)
         self.assertIn(("can_copy_dash", "Superset"), perm_set)
@@ -648,10 +681,11 @@ class TestRolePermission(SupersetTestCase):
         self.assert_can_menu("Dashboards", perm_set)
 
     def assert_can_alpha(self, perm_set):
-        self.assert_can_all("AnnotationLayerModelView", perm_set)
-        self.assert_can_all("CssTemplateModelView", perm_set)
-        self.assert_can_all("TableModelView", perm_set)
-        self.assert_can_read("QueryView", perm_set)
+        self.assert_can_all("Annotation", perm_set)
+        self.assert_can_all("CssTemplate", perm_set)
+        self.assert_can_all("Dataset", perm_set)
+        self.assert_can_read("Query", perm_set)
+        self.assert_can_read("Database", perm_set)
         self.assertIn(("can_import_dashboards", "Superset"), perm_set)
         self.assertIn(("can_this_form_post", "CsvToDatabaseView"), perm_set)
         self.assertIn(("can_this_form_get", "CsvToDatabaseView"), perm_set)
@@ -668,9 +702,10 @@ class TestRolePermission(SupersetTestCase):
         self.assert_cannot_write("Queries", perm_set)
         self.assert_cannot_write("RoleModelView", perm_set)
         self.assert_cannot_write("UserDBModelView", perm_set)
+        self.assert_cannot_write("Database", perm_set)
 
     def assert_can_admin(self, perm_set):
-        self.assert_can_all("DatabaseView", perm_set)
+        self.assert_can_all("Database", perm_set)
         self.assert_can_all("RoleModelView", perm_set)
         self.assert_can_all("UserDBModelView", perm_set)
 
@@ -687,7 +722,7 @@ class TestRolePermission(SupersetTestCase):
     def test_is_admin_only(self):
         self.assertFalse(
             security_manager._is_admin_only(
-                security_manager.find_permission_view_menu("can_list", "TableModelView")
+                security_manager.find_permission_view_menu("can_read", "Dataset")
             )
         )
         self.assertFalse(
@@ -698,13 +733,11 @@ class TestRolePermission(SupersetTestCase):
             )
         )
 
-        log_permissions = ["can_list", "can_show"]
+        log_permissions = ["can_read"]
         for log_permission in log_permissions:
             self.assertTrue(
                 security_manager._is_admin_only(
-                    security_manager.find_permission_view_menu(
-                        log_permission, "LogModelView"
-                    )
+                    security_manager.find_permission_view_menu(log_permission, "Log")
                 )
             )
 
@@ -735,15 +768,13 @@ class TestRolePermission(SupersetTestCase):
     def test_is_alpha_only(self):
         self.assertFalse(
             security_manager._is_alpha_only(
-                security_manager.find_permission_view_menu("can_list", "TableModelView")
+                security_manager.find_permission_view_menu("can_read", "Dataset")
             )
         )
 
         self.assertTrue(
             security_manager._is_alpha_only(
-                security_manager.find_permission_view_menu(
-                    "muldelete", "TableModelView"
-                )
+                security_manager.find_permission_view_menu("can_write", "Dataset")
             )
         )
         self.assertTrue(
@@ -764,7 +795,7 @@ class TestRolePermission(SupersetTestCase):
     def test_is_gamma_pvm(self):
         self.assertTrue(
             security_manager._is_gamma_pvm(
-                security_manager.find_permission_view_menu("can_list", "TableModelView")
+                security_manager.find_permission_view_menu("can_read", "Dataset")
             )
         )
 
@@ -808,37 +839,21 @@ class TestRolePermission(SupersetTestCase):
         self.assert_cannot_alpha(granter_set)
 
     def test_gamma_permissions(self):
-        def assert_can_read(view_menu):
-            self.assertIn(("can_list", view_menu), gamma_perm_set)
-
-        def assert_can_write(view_menu):
-            self.assertIn(("can_add", view_menu), gamma_perm_set)
-            self.assertIn(("can_delete", view_menu), gamma_perm_set)
-            self.assertIn(("can_edit", view_menu), gamma_perm_set)
-
-        def assert_cannot_write(view_menu):
-            self.assertNotIn(("can_add", view_menu), gamma_perm_set)
-            self.assertNotIn(("can_delete", view_menu), gamma_perm_set)
-            self.assertNotIn(("can_edit", view_menu), gamma_perm_set)
-            self.assertNotIn(("can_save", view_menu), gamma_perm_set)
-
-        def assert_can_all(view_menu):
-            assert_can_read(view_menu)
-            assert_can_write(view_menu)
-
         gamma_perm_set = set()
         for perm in security_manager.find_role("Gamma").permissions:
             gamma_perm_set.add((perm.permission.name, perm.view_menu.name))
 
         # check read only perms
-        assert_can_read("TableModelView")
 
         # make sure that user can create slices and dashboards
-        assert_can_all("SliceModelView")
-        assert_can_all("DashboardModelView")
+        self.assert_can_all("Dashboard", gamma_perm_set)
+        self.assert_can_read("Dataset", gamma_perm_set)
 
-        assert_cannot_write("UserDBModelView")
-        assert_cannot_write("RoleModelView")
+        # make sure that user can create slices and dashboards
+        self.assert_can_all("Chart", gamma_perm_set)
+
+        self.assert_cannot_write("UserDBModelView", gamma_perm_set)
+        self.assert_cannot_write("RoleModelView", gamma_perm_set)
 
         self.assertIn(("can_add_slices", "Superset"), gamma_perm_set)
         self.assertIn(("can_copy_dash", "Superset"), gamma_perm_set)
@@ -1009,88 +1024,161 @@ class TestRowLevelSecurity(SupersetTestCase):
     """
 
     rls_entry = None
+    query_obj = dict(
+        groupby=[],
+        metrics=[],
+        filter=[],
+        is_timeseries=False,
+        columns=["value"],
+        granularity=None,
+        from_dttm=None,
+        to_dttm=None,
+        extras={},
+    )
+    NAME_AB_ROLE = "NameAB"
+    NAME_Q_ROLE = "NameQ"
+    NAMES_A_REGEX = re.compile(r"name like 'A%'")
+    NAMES_B_REGEX = re.compile(r"name like 'B%'")
+    NAMES_Q_REGEX = re.compile(r"name like 'Q%'")
+    BASE_FILTER_REGEX = re.compile(r"gender = 'boy'")
 
     def setUp(self):
         session = db.session
 
-        # Create the RowLevelSecurityFilter
-        self.rls_entry = RowLevelSecurityFilter()
-        self.rls_entry.tables.extend(
+        # Create roles
+        security_manager.add_role(self.NAME_AB_ROLE)
+        security_manager.add_role(self.NAME_Q_ROLE)
+        gamma_user = security_manager.find_user(username="gamma")
+        gamma_user.roles.append(security_manager.find_role(self.NAME_AB_ROLE))
+        gamma_user.roles.append(security_manager.find_role(self.NAME_Q_ROLE))
+        self.create_user_with_roles("NoRlsRoleUser", ["Gamma"])
+        session.commit()
+
+        # Create regular RowLevelSecurityFilter (energy_usage, unicode_test)
+        self.rls_entry1 = RowLevelSecurityFilter()
+        self.rls_entry1.tables.extend(
             session.query(SqlaTable)
             .filter(SqlaTable.table_name.in_(["energy_usage", "unicode_test"]))
             .all()
         )
-        self.rls_entry.clause = "value > {{ cache_key_wrapper(1) }}"
-        self.rls_entry.roles.append(
-            security_manager.find_role("Gamma")
-        )  # db.session.query(Role).filter_by(name="Gamma").first())
-        self.rls_entry.roles.append(security_manager.find_role("Alpha"))
-        db.session.add(self.rls_entry)
+        self.rls_entry1.filter_type = "Regular"
+        self.rls_entry1.clause = "value > {{ cache_key_wrapper(1) }}"
+        self.rls_entry1.group_key = None
+        self.rls_entry1.roles.append(security_manager.find_role("Gamma"))
+        self.rls_entry1.roles.append(security_manager.find_role("Alpha"))
+        db.session.add(self.rls_entry1)
+
+        # Create regular RowLevelSecurityFilter (birth_names name starts with A or B)
+        self.rls_entry2 = RowLevelSecurityFilter()
+        self.rls_entry2.tables.extend(
+            session.query(SqlaTable)
+            .filter(SqlaTable.table_name.in_(["birth_names"]))
+            .all()
+        )
+        self.rls_entry2.filter_type = "Regular"
+        self.rls_entry2.clause = "name like 'A%' or name like 'B%'"
+        self.rls_entry2.group_key = "name"
+        self.rls_entry2.roles.append(security_manager.find_role("NameAB"))
+        db.session.add(self.rls_entry2)
+
+        # Create Regular RowLevelSecurityFilter (birth_names name starts with Q)
+        self.rls_entry3 = RowLevelSecurityFilter()
+        self.rls_entry3.tables.extend(
+            session.query(SqlaTable)
+            .filter(SqlaTable.table_name.in_(["birth_names"]))
+            .all()
+        )
+        self.rls_entry3.filter_type = "Regular"
+        self.rls_entry3.clause = "name like 'Q%'"
+        self.rls_entry3.group_key = "name"
+        self.rls_entry3.roles.append(security_manager.find_role("NameQ"))
+        db.session.add(self.rls_entry3)
+
+        # Create Base RowLevelSecurityFilter (birth_names boys)
+        self.rls_entry4 = RowLevelSecurityFilter()
+        self.rls_entry4.tables.extend(
+            session.query(SqlaTable)
+            .filter(SqlaTable.table_name.in_(["birth_names"]))
+            .all()
+        )
+        self.rls_entry4.filter_type = "Base"
+        self.rls_entry4.clause = "gender = 'boy'"
+        self.rls_entry4.group_key = "gender"
+        self.rls_entry4.roles.append(security_manager.find_role("Admin"))
+        db.session.add(self.rls_entry4)
 
         db.session.commit()
 
     def tearDown(self):
         session = db.session
-        session.delete(self.rls_entry)
+        session.delete(self.rls_entry1)
+        session.delete(self.rls_entry2)
+        session.delete(self.rls_entry3)
+        session.delete(self.rls_entry4)
+        session.delete(security_manager.find_role("NameAB"))
+        session.delete(security_manager.find_role("NameQ"))
+        session.delete(self.get_user("NoRlsRoleUser"))
         session.commit()
 
-    # Do another test to make sure it doesn't alter another query
-    def test_rls_filter_alters_query(self):
-        g.user = self.get_user(
-            username="alpha"
-        )  # self.login() doesn't actually set the user
+    @pytest.mark.usefixtures("load_energy_table_with_slice")
+    def test_rls_filter_alters_energy_query(self):
+        g.user = self.get_user(username="alpha")
         tbl = self.get_table_by_name("energy_usage")
-        query_obj = dict(
-            groupby=[],
-            metrics=[],
-            filter=[],
-            is_timeseries=False,
-            columns=["value"],
-            granularity=None,
-            from_dttm=None,
-            to_dttm=None,
-            extras={},
-        )
-        sql = tbl.get_query_str(query_obj)
-        assert tbl.get_extra_cache_keys(query_obj) == [1]
+        sql = tbl.get_query_str(self.query_obj)
+        assert tbl.get_extra_cache_keys(self.query_obj) == [1]
         assert "value > 1" in sql
 
-    def test_rls_filter_doesnt_alter_query(self):
+    @pytest.mark.usefixtures("load_energy_table_with_slice")
+    def test_rls_filter_doesnt_alter_energy_query(self):
         g.user = self.get_user(
             username="admin"
         )  # self.login() doesn't actually set the user
         tbl = self.get_table_by_name("energy_usage")
-        query_obj = dict(
-            groupby=[],
-            metrics=[],
-            filter=[],
-            is_timeseries=False,
-            columns=["value"],
-            granularity=None,
-            from_dttm=None,
-            to_dttm=None,
-            extras={},
-        )
-        sql = tbl.get_query_str(query_obj)
-        assert tbl.get_extra_cache_keys(query_obj) == []
+        sql = tbl.get_query_str(self.query_obj)
+        assert tbl.get_extra_cache_keys(self.query_obj) == []
         assert "value > 1" not in sql
 
+    @pytest.mark.usefixtures("load_unicode_dashboard_with_slice")
     def test_multiple_table_filter_alters_another_tables_query(self):
         g.user = self.get_user(
             username="alpha"
         )  # self.login() doesn't actually set the user
         tbl = self.get_table_by_name("unicode_test")
-        query_obj = dict(
-            groupby=[],
-            metrics=[],
-            filter=[],
-            is_timeseries=False,
-            columns=["value"],
-            granularity=None,
-            from_dttm=None,
-            to_dttm=None,
-            extras={},
-        )
-        sql = tbl.get_query_str(query_obj)
-        assert tbl.get_extra_cache_keys(query_obj) == [1]
+        sql = tbl.get_query_str(self.query_obj)
+        assert tbl.get_extra_cache_keys(self.query_obj) == [1]
         assert "value > 1" in sql
+
+    def test_rls_filter_alters_gamma_birth_names_query(self):
+        g.user = self.get_user(username="gamma")
+        tbl = self.get_table_by_name("birth_names")
+        sql = tbl.get_query_str(self.query_obj)
+
+        # establish that the filters are grouped together correctly with
+        # ANDs, ORs and parens in the correct place
+        assert (
+            "WHERE ((name like 'A%'\n        or name like 'B%')\n       OR (name like 'Q%'))\n  AND (gender = 'boy');"
+            in sql
+        )
+
+    def test_rls_filter_alters_no_role_user_birth_names_query(self):
+        g.user = self.get_user(username="NoRlsRoleUser")
+        tbl = self.get_table_by_name("birth_names")
+        sql = tbl.get_query_str(self.query_obj)
+
+        # gamma's filters should not be present query
+        assert not self.NAMES_A_REGEX.search(sql)
+        assert not self.NAMES_B_REGEX.search(sql)
+        assert not self.NAMES_Q_REGEX.search(sql)
+        # base query should be present
+        assert self.BASE_FILTER_REGEX.search(sql)
+
+    def test_rls_filter_doesnt_alter_admin_birth_names_query(self):
+        g.user = self.get_user(username="admin")
+        tbl = self.get_table_by_name("birth_names")
+        sql = tbl.get_query_str(self.query_obj)
+
+        # no filters are applied for admin user
+        assert not self.NAMES_A_REGEX.search(sql)
+        assert not self.NAMES_B_REGEX.search(sql)
+        assert not self.NAMES_Q_REGEX.search(sql)
+        assert not self.BASE_FILTER_REGEX.search(sql)

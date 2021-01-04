@@ -18,15 +18,11 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import {
-  OverlayTrigger,
-  Popover,
-  ListGroup,
-  ListGroupItem,
-} from 'react-bootstrap';
+import { ListGroup, ListGroupItem } from 'react-bootstrap';
 import { connect } from 'react-redux';
 import { t, withTheme } from '@superset-ui/core';
 import { InfoTooltipWithTrigger } from '@superset-ui/chart-controls';
+import Popover from 'src/common/components/Popover';
 import AsyncEsmComponent from 'src/components/AsyncEsmComponent';
 import { getChartKey } from 'src/explore/exploreUtils';
 import { runAnnotationQuery } from 'src/chart/chartAction';
@@ -62,8 +58,10 @@ const defaultProps = {
 class AnnotationLayerControl extends React.PureComponent {
   constructor(props) {
     super(props);
+    this.state = { popoverVisible: {}, addedAnnotationIndex: null };
     this.addAnnotationLayer = this.addAnnotationLayer.bind(this);
     this.removeAnnotationLayer = this.removeAnnotationLayer.bind(this);
+    this.handleVisibleChange = this.handleVisibleChange.bind(this);
   }
 
   componentDidMount() {
@@ -85,52 +83,52 @@ class AnnotationLayerControl extends React.PureComponent {
     }
   }
 
-  addAnnotationLayer(annotationLayer) {
-    const annotation = annotationLayer;
-    let annotations = this.props.value.slice();
-    const i = annotations.findIndex(
-      x => x.name === (annotation.oldName || annotation.name),
-    );
-    delete annotation.oldName;
-    if (i > -1) {
-      annotations[i] = annotation;
+  addAnnotationLayer(originalAnnotation, newAnnotation) {
+    let annotations = this.props.value;
+    if (annotations.includes(originalAnnotation)) {
+      annotations = annotations.map(anno =>
+        anno === originalAnnotation ? newAnnotation : anno,
+      );
     } else {
-      annotations = annotations.concat(annotation);
+      annotations = [...annotations, newAnnotation];
+      this.setState({ addedAnnotationIndex: annotations.length - 1 });
     }
-    this.props.refreshAnnotationData(annotation);
+
+    this.props.refreshAnnotationData(newAnnotation);
     this.props.onChange(annotations);
+  }
+
+  handleVisibleChange(visible, popoverKey) {
+    this.setState(prevState => ({
+      popoverVisible: { ...prevState.popoverVisible, [popoverKey]: visible },
+    }));
   }
 
   removeAnnotationLayer(annotation) {
-    const annotations = this.props.value
-      .slice()
-      .filter(x => x.name !== annotation.oldName);
+    const annotations = this.props.value.filter(anno => anno !== annotation);
     this.props.onChange(annotations);
   }
 
-  renderPopover(parent, annotation, error) {
-    const id = !annotation ? '_new' : annotation.name;
-    const { theme } = this.props;
+  renderPopover(popoverKey, annotation, error) {
+    const id = annotation?.name || '_new';
+
     return (
-      <Popover
-        style={{ maxWidth: 'none' }}
-        title={
-          annotation ? t('Edit Annotation Layer') : t('Add Annotation Layer')
-        }
-        id={`annotation-pop-${id}`}
-      >
+      <div id={`annotation-pop-${id}`} data-test="popover-content">
         <AnnotationLayer
           {...annotation}
-          parent={this.refs[parent]}
           error={error}
           colorScheme={this.props.colorScheme}
           vizType={this.props.vizType}
-          addAnnotationLayer={this.addAnnotationLayer}
-          removeAnnotationLayer={this.removeAnnotationLayer}
-          close={() => this.refs[parent].hide()}
-          theme={theme}
+          addAnnotationLayer={newAnnotation =>
+            this.addAnnotationLayer(annotation, newAnnotation)
+          }
+          removeAnnotationLayer={() => this.removeAnnotationLayer(annotation)}
+          close={() => {
+            this.handleVisibleChange(false, popoverKey);
+            this.setState({ addedAnnotationIndex: null });
+          }}
         />
-      </Popover>
+      </div>
     );
   }
 
@@ -157,40 +155,54 @@ class AnnotationLayerControl extends React.PureComponent {
   }
 
   render() {
+    const { addedAnnotationIndex } = this.state;
+    const addedAnnotation = this.props.value[addedAnnotationIndex];
+
     const annotations = this.props.value.map((anno, i) => (
-      <OverlayTrigger
+      <Popover
         key={i}
         trigger="click"
-        rootClose
-        ref={`overlay-${i}`}
         placement="right"
-        overlay={this.renderPopover(
-          `overlay-${i}`,
+        title={t('Edit Annotation Layer')}
+        content={this.renderPopover(
+          i,
           anno,
           this.props.annotationError[anno.name],
         )}
+        visible={this.state.popoverVisible[i]}
+        onVisibleChange={visible => this.handleVisibleChange(visible, i)}
       >
         <ListGroupItem>
           <span>{anno.name}</span>
           <span style={{ float: 'right' }}>{this.renderInfo(anno)}</span>
         </ListGroupItem>
-      </OverlayTrigger>
+      </Popover>
     ));
+
+    const addLayerPopoverKey = 'add';
     return (
       <div>
         <ListGroup>
           {annotations}
-          <OverlayTrigger
+          <Popover
             trigger="click"
-            rootClose
-            ref="overlay-new"
             placement="right"
-            overlay={this.renderPopover('overlay-new')}
+            content={this.renderPopover(addLayerPopoverKey, addedAnnotation)}
+            title={t('Add Annotation Layer')}
+            visible={this.state.popoverVisible[addLayerPopoverKey]}
+            destroyTooltipOnHide
+            onVisibleChange={visible =>
+              this.handleVisibleChange(visible, addLayerPopoverKey)
+            }
           >
             <ListGroupItem>
-              <i className="fa fa-plus" /> &nbsp; {t('Add Annotation Layer')}
+              <i
+                data-test="add-annotation-layer-button"
+                className="fa fa-plus"
+              />{' '}
+              &nbsp; {t('Add Annotation Layer')}
             </ListGroupItem>
-          </OverlayTrigger>
+          </Popover>
         </ListGroup>
       </div>
     );
@@ -207,7 +219,8 @@ function mapStateToProps({ charts, explore }) {
   const chart = charts[chartKey] || charts[0] || {};
 
   return {
-    colorScheme: (explore.controls || {}).color_scheme.value,
+    // eslint-disable-next-line camelcase
+    colorScheme: explore.controls?.color_scheme?.value,
     annotationError: chart.annotationError,
     annotationQuery: chart.annotationQuery,
     vizType: explore.controls.viz_type.value,

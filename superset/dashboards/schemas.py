@@ -26,6 +26,7 @@ from superset.utils import core as utils
 
 get_delete_ids_schema = {"type": "array", "items": {"type": "integer"}}
 get_export_ids_schema = {"type": "array", "items": {"type": "integer"}}
+get_fav_star_ids_schema = {"type": "array", "items": {"type": "integer"}}
 thumbnail_query_schema = {
     "type": "object",
     "properties": {"force": {"type": "boolean"}},
@@ -97,10 +98,14 @@ def validate_json_metadata(value: Union[bytes, bytearray, str]) -> None:
 
 
 class DashboardJSONMetadataSchema(Schema):
+    # filter_configuration is for dashboard-native filters
+    filter_configuration = fields.List(fields.Dict(), allow_none=True)
     timed_refresh_immune_slices = fields.List(fields.Integer())
+    # deprecated wrt dashboard-native filters
     filter_scopes = fields.Dict()
     expanded_slices = fields.Dict()
     refresh_frequency = fields.Integer()
+    # deprecated wrt dashboard-native filters
     default_filters = fields.Str()
     stagger_refresh = fields.Boolean()
     stagger_time = fields.Integer()
@@ -163,3 +168,26 @@ class DashboardPutSchema(BaseDashboardSchema):
         validate=validate_json_metadata,
     )
     published = fields.Boolean(description=published_description, allow_none=True)
+
+
+class ChartFavStarResponseResult(Schema):
+    id = fields.Integer(description="The Chart id")
+    value = fields.Boolean(description="The FaveStar value")
+
+
+class GetFavStarIdsSchema(Schema):
+    result = fields.List(
+        fields.Nested(ChartFavStarResponseResult),
+        description="A list of results for each corresponding chart in the request",
+    )
+
+
+class ImportV1DashboardSchema(Schema):
+    dashboard_title = fields.String(required=True)
+    description = fields.String(allow_none=True)
+    css = fields.String(allow_none=True)
+    slug = fields.String(allow_none=True)
+    uuid = fields.UUID(required=True)
+    position = fields.Dict()
+    metadata = fields.Dict()
+    version = fields.String(required=True)

@@ -276,23 +276,6 @@ server (`superset run` or `flask run`) is not intended for production use.
 If not using gunicorn, you may want to disable the use of flask-compress
 by setting `COMPRESS_REGISTER = False` in your `superset_config.py`
 
-Flask-AppBuilder Permissions
-----------------------------
-
-By default, every time the Flask-AppBuilder (FAB) app is initialized the
-permissions and views are added automatically to the backend and associated with
-the ‘Admin’ role. The issue, however, is when you are running multiple concurrent
-workers this creates a lot of contention and race conditions when defining
-permissions and views.
-
-To alleviate this issue, the automatic updating of permissions can be disabled
-by setting `FAB_UPDATE_PERMS = False` (defaults to True).
-
-In a production environment initialization could take on the following form:
-
-  superset init
-  gunicorn -w 10 ... superset:app
-
 Configuration behind a load balancer
 ------------------------------------
 
@@ -384,8 +367,8 @@ Caching
 
 Superset uses `Flask-Cache <https://pythonhosted.org/Flask-Cache/>`_ for
 caching purpose. Configuring your caching backend is as easy as providing
-a ``CACHE_CONFIG``, constant in your ``superset_config.py`` that
-complies with the Flask-Cache specifications.
+``CACHE_CONFIG`` and ``DATA_CACHE_CONFIG`, constants in ``superset_config.py``
+that complies with `the Flask-Cache specifications <https://flask-caching.readthedocs.io/en/latest/#configuring-flask-caching>`_.
 
 Flask-Cache supports multiple caching backends (Redis, Memcached,
 SimpleCache (in-memory), or the local filesystem). If you are going to use
@@ -395,14 +378,13 @@ the `redis <https://pypi.python.org/pypi/redis>`_ Python package: ::
 
     pip install redis
 
-For setting your timeouts, this is done in the Superset metadata and goes
-up the "timeout searchpath", from your slice configuration, to your
-data source's configuration, to your database's and ultimately falls back
-into your global default defined in ``CACHE_CONFIG``.
+For chart data, Superset goes up a “timeout search path”, from a slice's configuration
+to the datasource’s, the database’s, then ultimately falls back to the global default
+defined in ``DATA_CACHE_CONFIG``.
 
 .. code-block:: python
 
-    CACHE_CONFIG = {
+    DATA_CACHE_CONFIG = {
         'CACHE_TYPE': 'redis',
         'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24, # 1 day default (in secs)
         'CACHE_KEY_PREFIX': 'superset_results',
@@ -417,7 +399,7 @@ object that is compatible with the `Flask-Cache <https://pythonhosted.org/Flask-
 
     from custom_caching import CustomCache
 
-    def init_cache(app):
+    def init_data_cache(app):
         """Takes an app instance and returns a custom cache backend"""
         config = {
             'CACHE_DEFAULT_TIMEOUT': 60 * 60 * 24, # 1 day default (in secs)
@@ -425,7 +407,7 @@ object that is compatible with the `Flask-Cache <https://pythonhosted.org/Flask-
         }
         return CustomCache(app, config)
 
-    CACHE_CONFIG = init_cache
+    DATA_CACHE_CONFIG = init_data_cache
 
 Superset has a Celery task that will periodically warm up the cache based on
 different strategies. To use it, add the following to the `CELERYBEAT_SCHEDULE`
@@ -830,7 +812,7 @@ there's a **schema** parameter you can set in the table form.
 External Password store for SQLAlchemy connections
 --------------------------------------------------
 It is possible to use an external store for you database passwords. This is
-useful if you a running a custom secret distribution framework and do not wish
+useful if you are running a custom secret distribution framework and do not wish
 to store secrets in Superset's meta database.
 
 Example:
@@ -1154,6 +1136,7 @@ Make sure you enable email reports in your configuration file
 
     ENABLE_SCHEDULED_EMAIL_REPORTS = True
 
+This flag enables some permissions that are stored in your database, so you'll want to run `superset init` again if you are running this in a dev environment.
 Now you will find two new items in the navigation bar that allow you to schedule email
 reports
 

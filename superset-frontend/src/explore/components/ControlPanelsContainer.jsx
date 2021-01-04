@@ -21,14 +21,18 @@ import React from 'react';
 import PropTypes from 'prop-types';
 import { bindActionCreators } from 'redux';
 import { connect } from 'react-redux';
-import { Alert, Tab, Tabs } from 'react-bootstrap';
-import { t, styled } from '@superset-ui/core';
+import { Alert } from 'react-bootstrap';
+import { css } from '@emotion/core';
+import { t, styled, getChartControlPanelRegistry } from '@superset-ui/core';
 
+import Tabs from 'src/common/components/Tabs';
+import { PluginContext } from 'src/components/DynamicPlugins';
+import Loading from 'src/components/Loading';
 import ControlPanelSection from './ControlPanelSection';
 import ControlRow from './ControlRow';
 import Control from './Control';
 import { sectionsToRender } from '../controlUtils';
-import * as exploreActions from '../actions/exploreActions';
+import { exploreActions } from '../actions/exploreActions';
 
 const propTypes = {
   actions: PropTypes.object.isRequired,
@@ -43,8 +47,9 @@ const propTypes = {
 const Styles = styled.div`
   height: 100%;
   max-height: 100%;
+  overflow: auto;
   .remove-alert {
-    cursor: 'pointer';
+    cursor: pointer;
   }
   #controlSections {
     display: flex;
@@ -61,7 +66,19 @@ const Styles = styled.div`
   }
 `;
 
+const ControlPanelsTabs = styled(Tabs)`
+  ${({ fullWidth }) =>
+    css`
+      .ant-tabs-nav-list {
+        width: ${fullWidth ? '100%' : '50%'};
+      }
+    `}
+`;
+
 class ControlPanelsContainer extends React.Component {
+  // trigger updates to the component when async plugins load
+  static contextType = PluginContext;
+
   constructor(props) {
     super(props);
 
@@ -106,8 +123,8 @@ class ControlPanelsContainer extends React.Component {
 
     return (
       <Control
-        name={name}
         key={`control-${name}`}
+        name={name}
         validationErrors={validationErrors}
         actions={actions}
         formData={provideFormDataToProps ? formData : null}
@@ -147,7 +164,11 @@ class ControlPanelsContainer extends React.Component {
                 // When the item is a React element
                 return controlItem;
               }
-              if (controlItem.name && controlItem.config) {
+              if (
+                controlItem.name &&
+                controlItem.config &&
+                controlItem.name !== 'datasource'
+              ) {
                 return this.renderControl(controlItem);
               }
               return null;
@@ -170,6 +191,14 @@ class ControlPanelsContainer extends React.Component {
   }
 
   render() {
+    const controlPanelRegistry = getChartControlPanelRegistry();
+    if (
+      !controlPanelRegistry.has(this.props.form_data.viz_type) &&
+      this.context.loading
+    ) {
+      return <Loading />;
+    }
+
     const querySectionsToRender = [];
     const displaySectionsToRender = [];
     this.sectionsToRender().forEach(section => {
@@ -192,7 +221,7 @@ class ControlPanelsContainer extends React.Component {
         displaySectionsToRender.push(section);
       }
     });
-
+    const showCustomizeTab = displaySectionsToRender.length > 0;
     return (
       <Styles>
         {this.props.alert && (
@@ -208,16 +237,20 @@ class ControlPanelsContainer extends React.Component {
             />
           </Alert>
         )}
-        <Tabs id="controlSections">
-          <Tab eventKey="query" title={t('Data')}>
+        <ControlPanelsTabs
+          id="controlSections"
+          data-test="control-tabs"
+          fullWidth={showCustomizeTab}
+        >
+          <Tabs.TabPane key="query" tab={t('Data')}>
             {querySectionsToRender.map(this.renderControlPanelSection)}
-          </Tab>
-          {displaySectionsToRender.length > 0 && (
-            <Tab eventKey="display" title={t('Customize')}>
+          </Tabs.TabPane>
+          {showCustomizeTab && (
+            <Tabs.TabPane key="display" tab={t('Customize')}>
               {displaySectionsToRender.map(this.renderControlPanelSection)}
-            </Tab>
+            </Tabs.TabPane>
           )}
-        </Tabs>
+        </ControlPanelsTabs>
       </Styles>
     );
   }

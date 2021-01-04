@@ -22,13 +22,11 @@ import PropTypes from 'prop-types';
 import { bindActionCreators } from 'redux';
 import { connect } from 'react-redux';
 import { Alert } from 'react-bootstrap';
-import Dialog from 'react-bootstrap-dialog';
 import { t } from '@superset-ui/core';
 import { InfoTooltipWithTrigger } from '@superset-ui/chart-controls';
 import shortid from 'shortid';
 
 import Button from 'src/components/Button';
-import { exploreChart } from '../../explore/exploreUtils';
 import * as actions from '../actions/sqlLab';
 
 const propTypes = {
@@ -37,6 +35,7 @@ const propTypes = {
   errorMessage: PropTypes.string,
   timeout: PropTypes.number,
   database: PropTypes.object.isRequired,
+  onClick: PropTypes.func.isRequired,
 };
 const defaultProps = {
   query: {},
@@ -45,46 +44,10 @@ const defaultProps = {
 class ExploreResultsButton extends React.PureComponent {
   constructor(props) {
     super(props);
-    this.visualize = this.visualize.bind(this);
-    this.onClick = this.onClick.bind(this);
     this.getInvalidColumns = this.getInvalidColumns.bind(this);
     this.renderInvalidColumnMessage = this.renderInvalidColumnMessage.bind(
       this,
     );
-  }
-
-  onClick() {
-    const { timeout } = this.props;
-    const msg = this.renderInvalidColumnMessage();
-    if (Math.round(this.getQueryDuration()) > timeout) {
-      this.dialog.show({
-        title: t('Explore'),
-        body: this.renderTimeoutWarning(),
-        actions: [
-          Dialog.CancelAction(),
-          Dialog.OKAction(() => {
-            this.visualize();
-          }),
-        ],
-        bsSize: 'large',
-        onHide: dialog => {
-          dialog.hide();
-        },
-      });
-    } else if (msg) {
-      this.dialog.show({
-        title: t('Explore'),
-        body: msg,
-        actions: [Dialog.DefaultAction('Ok', () => {}, 'btn-primary')],
-        bsSize: 'large',
-        bsStyle: 'warning',
-        onHide: dialog => {
-          dialog.hide();
-        },
-      });
-    } else {
-      this.visualize();
-    }
   }
 
   getColumns() {
@@ -135,35 +98,6 @@ class ExploreResultsButton extends React.PureComponent {
       datasourceName: this.datasourceName(),
       columns: this.getColumns(),
     };
-  }
-
-  visualize() {
-    this.props.actions
-      .createDatasource(this.buildVizOptions())
-      .then(data => {
-        const columns = this.getColumns();
-        const formData = {
-          datasource: `${data.table_id}__table`,
-          metrics: [],
-          groupby: [],
-          time_range: 'No filter',
-          viz_type: 'table',
-          all_columns: columns.map(c => c.name),
-          row_limit: 1000,
-        };
-
-        this.props.actions.addInfoToast(
-          t('Creating a data source and creating a new tab'),
-        );
-
-        // open new window for data visualization
-        exploreChart(formData);
-      })
-      .catch(() => {
-        this.props.actions.addDangerToast(
-          this.props.errorMessage || t('An error occurred'),
-        );
-      });
   }
 
   renderTimeoutWarning() {
@@ -217,7 +151,7 @@ class ExploreResultsButton extends React.PureComponent {
       <>
         <Button
           buttonSize="small"
-          onClick={this.onClick}
+          onClick={this.props.onClick}
           disabled={!allowsSubquery}
           tooltip={t('Explore the result set in the data exploration view')}
         >
@@ -228,11 +162,6 @@ class ExploreResultsButton extends React.PureComponent {
           />{' '}
           {t('Explore')}
         </Button>
-        <Dialog
-          ref={el => {
-            this.dialog = el;
-          }}
-        />
       </>
     );
   }
@@ -253,7 +182,6 @@ function mapDispatchToProps(dispatch) {
   };
 }
 
-export { ExploreResultsButton };
 export default connect(
   mapStateToProps,
   mapDispatchToProps,

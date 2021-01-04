@@ -18,12 +18,14 @@
  */
 import React from 'react';
 import PropTypes from 'prop-types';
-import { ButtonGroup, Collapse, Fade, Well } from 'react-bootstrap';
+import { ButtonGroup, Collapse, Well } from 'react-bootstrap';
 import shortid from 'shortid';
-import { t } from '@superset-ui/core';
+import { t, styled } from '@superset-ui/core';
 
+import Fade from 'src/common/components/Fade';
+import { Tooltip } from 'src/common/components/Tooltip';
 import CopyToClipboard from '../../components/CopyToClipboard';
-import Link from '../../components/Link';
+import { IconTooltip } from '../../components/IconTooltip';
 import ColumnElement from './ColumnElement';
 import ShowSQL from './ShowSQL';
 import ModalTrigger from '../../components/ModalTrigger';
@@ -40,6 +42,14 @@ const defaultProps = {
   table: null,
   timeout: 500,
 };
+
+const StyledSpan = styled.span`
+  color: ${({ theme }) => theme.colors.primary.dark1};
+  &: hover {
+    color: ${({ theme }) => theme.colors.primary.dark2};
+  }
+  cursor: pointer;
+`;
 
 class TableElement extends React.PureComponent {
   constructor(props) {
@@ -85,7 +95,7 @@ class TableElement extends React.PureComponent {
   }
 
   toggleSortColumns() {
-    this.setState({ sortColumns: !this.state.sortColumns });
+    this.setState(prevState => ({ sortColumns: !prevState.sortColumns }));
   }
 
   removeFromStore() {
@@ -110,10 +120,9 @@ class TableElement extends React.PureComponent {
           />
         );
       }
-      let latest = [];
-      for (const k in table.partitions.latest) {
-        latest.push(`${k}=${table.partitions.latest[k]}`);
-      }
+      let latest = Object.entries(table.partitions?.latest || []).map(
+        ([key, value]) => `${key}=${value}`,
+      );
       latest = latest.join('/');
       header = (
         <Well bsSize="small">
@@ -144,7 +153,7 @@ class TableElement extends React.PureComponent {
             <pre key={i}>{JSON.stringify(ix, null, '  ')}</pre>
           ))}
           triggerNode={
-            <Link
+            <IconTooltip
               className="fa fa-key pull-left m-l-2"
               tooltip={t('View keys & indexes (%s)', table.indexes.length)}
             />
@@ -155,10 +164,10 @@ class TableElement extends React.PureComponent {
     return (
       <ButtonGroup className="ws-el-controls">
         {keyLink}
-        <Link
+        <IconTooltip
           className={
             `fa fa-sort-${!this.state.sortColumns ? 'alpha' : 'numeric'}-asc ` +
-            'pull-left sort-cols m-l-2'
+            'pull-left sort-cols m-l-2 pointer'
           }
           onClick={this.toggleSortColumns}
           tooltip={
@@ -166,11 +175,14 @@ class TableElement extends React.PureComponent {
               ? t('Sort columns alphabetically')
               : t('Original table column order')
           }
-          href="#"
         />
         {table.selectStar && (
           <CopyToClipboard
-            copyNode={<a className="fa fa-clipboard pull-left m-l-2" />}
+            copyNode={
+              <IconTooltip aria-label="Copy">
+                <i aria-hidden className="fa fa-clipboard pull-left m-l-2" />
+              </IconTooltip>
+            }
             text={table.selectStar}
             shouldShowText={false}
             tooltipText={t('Copy SELECT statement to the clipboard')}
@@ -183,11 +195,10 @@ class TableElement extends React.PureComponent {
             title={t('CREATE VIEW statement')}
           />
         )}
-        <Link
-          className="fa fa-times table-remove pull-left m-l-2"
+        <IconTooltip
+          className="fa fa-times table-remove pull-left m-l-2 pointer"
           onClick={this.removeTable}
           tooltip={t('Remove table preview')}
-          href="#"
         />
       </ButtonGroup>
     );
@@ -196,23 +207,30 @@ class TableElement extends React.PureComponent {
   renderHeader() {
     const { table } = this.props;
     return (
-      <div className="clearfix">
-        <div className="pull-left">
-          <a
-            href="#"
+      <div className="clearfix header-container">
+        <Tooltip
+          id="copy-to-clipboard-tooltip"
+          placement="top"
+          style={{ cursor: 'pointer' }}
+          title={table.name}
+          trigger={['hover']}
+        >
+          <StyledSpan
+            data-test="collapse"
             className="table-name"
             onClick={e => {
               this.toggleTable(e);
             }}
           >
             <strong>{table.name}</strong>
-          </a>
-        </div>
-        <div className="pull-right">
+          </StyledSpan>
+        </Tooltip>
+
+        <div className="pull-right header-right-side">
           {table.isMetadataLoading || table.isExtraMetadataLoading ? (
             <Loading position="inline" />
           ) : (
-            <Fade in={this.state.hovered}>{this.renderControls()}</Fade>
+            <Fade hovered={this.state.hovered}>{this.renderControls()}</Fade>
           )}
           <i
             role="button"

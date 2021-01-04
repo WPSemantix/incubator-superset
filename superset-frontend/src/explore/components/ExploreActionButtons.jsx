@@ -23,7 +23,7 @@ import { t } from '@superset-ui/core';
 
 import URLShortLinkButton from '../../components/URLShortLinkButton';
 import EmbedCodeButton from './EmbedCodeButton';
-import DisplayQueryButton from './DisplayQueryButton';
+import ConnectedDisplayQueryButton from './DisplayQueryButton';
 import { exportChart, getExploreLongUrl } from '../exploreUtils';
 
 const propTypes = {
@@ -33,7 +33,7 @@ const propTypes = {
   chartStatus: PropTypes.string,
   chartHeight: PropTypes.string.isRequired,
   latestQueryFormData: PropTypes.object,
-  queryResponse: PropTypes.object,
+  queriesResponse: PropTypes.arrayOf(PropTypes.object),
   slice: PropTypes.object,
 };
 
@@ -43,7 +43,7 @@ export default function ExploreActionButtons({
   chartHeight,
   chartStatus,
   latestQueryFormData,
-  queryResponse,
+  queriesResponse,
   slice,
 }) {
   const exportToCSVClasses = cx('btn btn-default btn-sm', {
@@ -61,7 +61,11 @@ export default function ExploreActionButtons({
   });
 
   return (
-    <div className="btn-group results" role="group">
+    <div
+      className="btn-group results"
+      role="group"
+      data-test="btn-group-results"
+    >
       {latestQueryFormData && (
         <URLShortLinkButton
           url={getExploreLongUrl(latestQueryFormData)}
@@ -75,7 +79,7 @@ export default function ExploreActionButtons({
       )}
 
       {latestQueryFormData && (
-        <a
+        <div
           role="button"
           tabIndex={0}
           onClick={doExportChart}
@@ -85,10 +89,10 @@ export default function ExploreActionButtons({
           rel="noopener noreferrer"
         >
           <i className="fa fa-file-code-o" /> .json
-        </a>
+        </div>
       )}
       {latestQueryFormData && (
-        <a
+        <div
           role="button"
           tabIndex={0}
           onClick={doExportCSV}
@@ -98,14 +102,15 @@ export default function ExploreActionButtons({
           rel="noopener noreferrer"
         >
           <i className="fa fa-file-text-o" /> .csv
-        </a>
+        </div>
       )}
-      <DisplayQueryButton
+      <ConnectedDisplayQueryButton
         chartHeight={chartHeight}
-        queryResponse={queryResponse}
+        queryResponse={queriesResponse?.[0]}
         latestQueryFormData={latestQueryFormData}
         chartStatus={chartStatus}
         onOpenInEditor={actions.redirectSQLLab}
+        onOpenPropertiesModal={actions.openPropertiesModal}
         slice={slice}
       />
     </div>

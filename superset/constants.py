@@ -50,6 +50,7 @@ class RouteMethod:  # pylint: disable=too-few-public-methods
 
     # RestModelView specific
     EXPORT = "export"
+    IMPORT = "import_"
     GET = "get"
     GET_LIST = "get_list"
     POST = "post"
@@ -62,3 +63,55 @@ class RouteMethod:  # pylint: disable=too-few-public-methods
     CRUD_SET = {ADD, LIST, EDIT, DELETE, ACTION_POST, SHOW}
     RELATED_VIEW_SET = {ADD, LIST, EDIT, DELETE}
     REST_MODEL_VIEW_CRUD_SET = {DELETE, GET, GET_LIST, POST, PUT, INFO}
+
+
+MODEL_VIEW_RW_METHOD_PERMISSION_MAP = {
+    "add": "write",
+    "api": "read",
+    "api_column_add": "write",
+    "api_column_edit": "write",
+    "api_create": "write",
+    "api_delete": "write",
+    "api_get": "read",
+    "api_read": "read",
+    "api_readvalues": "read",
+    "api_update": "write",
+    "annotation": "read",
+    "delete": "write",
+    "download": "read",
+    "download_dashboards": "read",
+    "edit": "write",
+    "list": "read",
+    "muldelete": "write",
+    "mulexport": "read",
+    "show": "read",
+    "new": "write",
+    "yaml_export": "read",
+    "refresh": "write",
+}
+
+MODEL_API_RW_METHOD_PERMISSION_MAP = {
+    "bulk_delete": "write",
+    "delete": "write",
+    "distinct": "read",
+    "export": "read",
+    "get": "read",
+    "get_list": "read",
+    "info": "read",
+    "post": "write",
+    "put": "write",
+    "related": "read",
+    "related_objects": "read",
+    "schemas": "read",
+    "select_star": "read",
+    "table_metadata": "read",
+    "test_connection": "read",
+    "favorite_status": "read",
+    "thumbnail": "read",
+    "import_": "write",
+    "refresh": "write",
+    "cache_screenshot": "read",
+    "screenshot": "read",
+    "data": "read",
+    "data_from_cache": "read",
+}

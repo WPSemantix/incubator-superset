@@ -39,9 +39,9 @@ need to be done at every release.
 
     # Checkout ASF dist repo
 
-    svn checkout https://dist.apache.org/repos/dist/dev/incubator/superset/ ~/svn/superset_dev
+    svn checkout https://dist.apache.org/repos/dist/dev/superset/ ~/svn/superset_dev
 
-    svn checkout https://dist.apache.org/repos/dist/release/incubator/superset/ ~/svn/superset
+    svn checkout https://dist.apache.org/repos/dist/release/superset/ ~/svn/superset
     cd ~/svn/superset
 
 
@@ -65,27 +65,35 @@ the wrong files/using wrong names. There's a script to help you set correctly al
 necessary environment variables. Change your current directory to `superset/RELEASING`
 and execute the `set_release_env.sh` script with the relevant parameters:
 
+Usage (BASH):
 ```bash
-    # usage (BASH): . set_release_env.sh <SUPERSET_RC_VERSION> <PGP_KEY_FULLNAME>
-    # usage (ZSH): source set_release_env.sh <SUPERSET_RC_VERSION> <PGP_KEY_FULLNAME>
-    #
-    # example: source set_release_env.sh 0.37.0rc1 myid@apache.org
+    . set_release_env.sh <SUPERSET_RC_VERSION> <PGP_KEY_FULLNAME>
 ```
 
-The script will output the exported variables. Here's example for 0.37.0rc1:
+Usage (ZSH):
+```bash
+    source set_release_env.sh <SUPERSET_RC_VERSION> <PGP_KEY_FULLNAME>
+```
+
+Example:
+```bash
+    source set_release_env.sh 0.38.0rc1 myid@apache.org
+```
+
+The script will output the exported variables. Here's example for 0.38.0rc1:
 
 ```
     Set Release env variables
-    SUPERSET_VERSION=0.37.0
+    SUPERSET_VERSION=0.38.0
     SUPERSET_RC=1
-    SUPERSET_GITHUB_BRANCH=0.37
+    SUPERSET_GITHUB_BRANCH=0.38
     SUPERSET_PGP_FULLNAME=myid@apache.org
-    SUPERSET_VERSION_RC=0.37.0rc1
-    SUPERSET_RELEASE=apache-superset-incubating-0.37.0
-    SUPERSET_RELEASE_RC=apache-superset-incubating-0.37.0rc1
-    SUPERSET_RELEASE_TARBALL=apache-superset-incubating-0.37.0-source.tar.gz
-    SUPERSET_RELEASE_RC_TARBALL=apache-superset-incubating-0.37.0rc1-source.tar.gz
-    SUPERSET_TMP_ASF_SITE_PATH=/tmp/incubator-superset-site-0.37.0
+    SUPERSET_VERSION_RC=0.38.0rc1
+    SUPERSET_RELEASE=apache-superset-0.38.0
+    SUPERSET_RELEASE_RC=apache-superset-0.38.0rc1
+    SUPERSET_RELEASE_TARBALL=apache-superset-0.38.0-source.tar.gz
+    SUPERSET_RELEASE_RC_TARBALL=apache-superset-0.38.0rc1-source.tar.gz
+    SUPERSET_TMP_ASF_SITE_PATH=/tmp/incubator-superset-site-0.38.0
 ```
 
 ## Crafting a source release
@@ -105,13 +113,14 @@ git push upstream $SUPERSET_GITHUB_BRANCH
 
 Next, update the `CHANGELOG.md` with all the changes that are included in the release.
 Make sure the branch has been pushed to `upstream` to ensure the changelog generator
-can pick up changes since the previous release (otherwise `github-changes` will raise
-an `Error: Not Found` exception).
+can pick up changes since the previous release.
 
+Example:
 ```bash
-# will overwrites the local CHANGELOG.md, somehow you need to merge it in
-github-changes -o apache -r incubator-superset --token $GITHUB_TOKEN -b $SUPERSET_GITHUB_BRANCH
+python changelog.py --previous_version 0.37 --current_version 0.38 changelog
 ```
+
+The script will checkout both branches and compare all the PR's, copy the output and paste it on the `CHANGELOG.md`
 
 Then, in `UPDATING.md`, a file that contains a list of notifications around
 deprecations and upgrading-related topics,
@@ -121,7 +130,7 @@ section for the new release.
 Finally bump the version number on `superset-frontend/package.json` (replace with whichever version is being released excluding the RC version):
 
 ```json
-    "version": "0.36.0"
+    "version": "0.38.0"
 ```
 
 Commit the change with the version number, then git tag the version with the release candidate and push to the branch:
@@ -231,38 +240,6 @@ here's an example:
 ```
 
 Following the result thread, yet another [VOTE] thread should be
-started at general@incubator.apache.org.
-
-To easily send the voting request to Apache community, still on the `superset/RELEASING` directory:
-
-```bash
-    # Note: use Superset's virtualenv
-    (venv)$ python send_email.py vote_ipmc
-```
-
-Once 3+ binding votes (by IPMC members) have been cast and at
-least 72 hours have past, you can post a [RESULT] thread
-
-To easily send the result email, still on the `superset/RELEASING` directory:
-
-```bash
-    # Note: use Superset's virtualenv
-    (venv)$ python send_email.py result_ipmc
-```
-
-Again, the script will interactively ask for extra information needed to fill out the email template. Based on the
-voting description, it will generate a passing, non passing or non conclusive email.
-here's an example:
-
-```bash
-    Sender email (ex: user@apache.org): your_apache_email@apache.org
-    Apache username: your_apache_user
-    Apache password: your_apache_password
-    A List of people with +1 binding vote (ex: Alan, Justin): Alan,Jeff,
-    A List of people with +1 non binding vote (ex: Ville):
-    A List of people with -1 vote (ex: John):
-```
-
 
 ### Validating a release
 
@@ -321,22 +298,4 @@ tag corresponding with the new version. Go to https://github.com/apache/incubato
 click the 3-dot icon and select `Create Release`, paste the content of the ANNOUNCE thread in the
 release notes, and publish the new release.
 
-## Post release
-
-#### Refresh documentation website
-
-Every once in a while we want to compile the documentation and publish it.
-Here's how to do it.
-
-```bash
-./make_docs.sh
-```
-
-Superset documentation site is ready at http://localhost:5002
-
-```
-$ cd /tmp/incubator-superset-site-${SUPERSET_VERSION}
-$ git add .
-$ git commit -a -m "New doc version ${SUPERSET_VERSION}"
-$ git push origin asf-site
-```
+At this point, a GitHub action will run that will check whether this release's version number is higher than the current 'latest' release. If that condition is true, this release sha will automatically be tagged as `latest` so that the most recent release can be referenced simply by using the 'latest' tag instead of looking up the version number. The existing version number tag will still exist, and can also be used for reference.

@@ -16,50 +16,164 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import React, { FunctionComponent, useState, useRef } from 'react';
-// @ts-ignore
-import { Table } from 'reactable-arc';
-import { Alert, FormControl, Modal } from 'react-bootstrap';
-import { SupersetClient, t } from '@superset-ui/core';
-
-import getClientErrorObject from '../utils/getClientErrorObject';
+import React, {
+  FunctionComponent,
+  useState,
+  useRef,
+  useEffect,
+  useCallback,
+} from 'react';
+import { Alert, FormControl, FormControlProps } from 'react-bootstrap';
+import { SupersetClient, t, styled } from '@superset-ui/core';
+import TableView from 'src/components/TableView';
+import StyledModal from 'src/common/components/Modal';
+import Button from 'src/components/Button';
+import { useListViewResource } from 'src/views/CRUD/hooks';
+import Dataset from 'src/types/Dataset';
+import { useDebouncedEffect } from 'src/explore/exploreUtils';
+import { getClientErrorObject } from '../utils/getClientErrorObject';
 import Loading from '../components/Loading';
 import withToasts from '../messageToasts/enhancers/withToasts';
 
+const CONFIRM_WARNING_MESSAGE = t(
+  'Warning! Changing the dataset may break the chart if the metadata (columns/metrics) does not exist in the target dataset',
+);
+
+interface Datasource {
+  type: string;
+  id: number;
+  uid: string;
+}
+
 interface ChangeDatasourceModalProps {
   addDangerToast: (msg: string) => void;
-  onChange: (id: number) => void;
+  addSuccessToast: (msg: string) => void;
+  onChange: (uid: string) => void;
   onDatasourceSave: (datasource: object, errors?: Array<any>) => {};
   onHide: () => void;
   show: boolean;
 }
 
-const TABLE_COLUMNS = ['name', 'type', 'schema', 'connection', 'creator'];
-const TABLE_FILTERABLE = ['rawName', 'type', 'schema', 'connection', 'creator'];
+const ConfirmModalStyled = styled.div`
+  .btn-container {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0px 15px;
+    margin: 10px 0 0 0;
+  }
+
+  .confirm-modal-container {
+    margin: 9px;
+  }
+`;
+
+const StyledSpan = styled.span`
+  cursor: pointer;
+  color: ${({ theme }) => theme.colors.primary.dark1};
+  &: hover {
+    color: ${({ theme }) => theme.colors.primary.dark2};
+  }
+`;
+
+const TABLE_COLUMNS = [
+  'name',
+  'type',
+  'schema',
+  'connection',
+  'creator',
+].map(col => ({ accessor: col, Header: col }));
+
 const CHANGE_WARNING_MSG = t(
-  'Changing the datasource may break the chart if the chart relies ' +
-    'on columns or metadata that does not exist in the target datasource',
+  'Changing the dataset may break the chart if the chart relies ' +
+    'on columns or metadata that does not exist in the target dataset',
 );
+
+const emptyRequest = {
+  pageIndex: 0,
+  pageSize: 20,
+  filters: [],
+  sortBy: [{ id: 'changed_on_delta_humanized' }],
+};
 
 const ChangeDatasourceModal: FunctionComponent<ChangeDatasourceModalProps> = ({
   addDangerToast,
+  addSuccessToast,
   onChange,
   onDatasourceSave,
   onHide,
   show,
 }) => {
-  const [datasources, setDatasources] = useState<any>(null);
   const [filter, setFilter] = useState<any>(undefined);
-  const [loading, setLoading] = useState(true);
+  const [confirmChange, setConfirmChange] = useState(false);
+  const [confirmedDataset, setConfirmedDataset] = useState<Datasource>();
   let searchRef = useRef<HTMLInputElement>(null);
 
-  const selectDatasource = (datasource: any) => {
+  const {
+    state: { loading, resourceCollection },
+    fetchData,
+  } = useListViewResource<Dataset>('dataset', t('dataset'), addDangerToast);
+
+  const selectDatasource = useCallback((datasource: Datasource) => {
+    setConfirmChange(true);
+    setConfirmedDataset(datasource);
+  }, []);
+
+  useDebouncedEffect(() => {
+    if (filter) {
+      fetchData({
+        ...emptyRequest,
+        filters: [
+          {
+            id: 'table_name',
+            operator: 'ct',
+            value: filter,
+          },
+        ],
+      });
+    }
+  }, 1000);
+
+  useEffect(() => {
+    const onEnterModal = async () => {
+      if (searchRef && searchRef.current) {
+        searchRef.current.focus();
+      }
+
+      // Fetch initial datasets for tableview
+      await fetchData(emptyRequest);
+    };
+
+    if (show) {
+      onEnterModal();
+    }
+  }, [
+    addDangerToast,
+    fetchData,
+    onChange,
+    onDatasourceSave,
+    onHide,
+    selectDatasource,
+    show,
+  ]);
+
+  const setSearchRef = (ref: any) => {
+    searchRef = ref;
+  };
+
+  const changeSearch = (
+    event: React.FormEvent<FormControl & FormControlProps>,
+  ) => {
+    const searchValue = (event.currentTarget?.value as string) ?? '';
+    setFilter(searchValue);
+  };
+
+  const handleChangeConfirm = () => {
     SupersetClient.get({
-      endpoint: `/datasource/get/${datasource.type}/${datasource.id}`,
+      endpoint: `/datasource/get/${confirmedDataset?.type}/${confirmedDataset?.id}`,
     })
       .then(({ json }) => {
         onDatasourceSave(json);
-        onChange(datasource.uid);
+        onChange(`${confirmedDataset?.id}__table`);
       })
       .catch(response => {
         getClientErrorObject(response).then(
@@ -72,88 +186,90 @@ const ChangeDatasourceModal: FunctionComponent<ChangeDatasourceModalProps> = ({
         );
       });
     onHide();
+    addSuccessToast('Successfully changed datasource!');
   };
 
-  const onEnterModal = () => {
-    if (searchRef && searchRef.current) {
-      searchRef.current.focus();
-    }
-    if (!datasources) {
-      SupersetClient.get({
-        endpoint: '/superset/datasources/',
-      })
-        .then(({ json }) => {
-          const data = json.map((ds: any) => ({
-            rawName: ds.name,
-            connection: ds.connection,
-            schema: ds.schema,
-            name: (
-              <a
-                href="#"
-                onClick={() => selectDatasource(ds)}
-                className="datasource-link"
-              >
-                {ds.name}
-              </a>
-            ),
-            type: ds.type,
-          }));
-          setLoading(false);
-          setDatasources(data);
-        })
-        .catch(response => {
-          setLoading(false);
-          getClientErrorObject(response).then(({ error }: any) => {
-            addDangerToast(error.error || error.statusText || error);
-          });
-        });
-    }
+  const handlerCancelConfirm = () => {
+    setConfirmChange(false);
   };
 
-  const setSearchRef = (ref: any) => {
-    searchRef = ref;
-  };
+  const renderTableView = () => {
+    const data = resourceCollection.map((ds: any) => ({
+      rawName: ds.table_name,
+      connection: ds.database.database_name,
+      schema: ds.schema,
+      name: (
+        <StyledSpan
+          role="button"
+          tabIndex={0}
+          data-test="datasource-link"
+          onClick={() => selectDatasource({ type: 'table', ...ds })}
+        >
+          {ds.table_name}
+        </StyledSpan>
+      ),
+      type: ds.kind,
+    }));
 
-  const changeSearch = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setFilter(event.target.value);
+    return data;
   };
 
   return (
-    <Modal show={show} onHide={onHide} onEnter={onEnterModal} bsSize="large">
-      <Modal.Header closeButton>
-        <Modal.Title>{t('Select a datasource')}</Modal.Title>
-      </Modal.Header>
-      <Modal.Body>
-        <Alert bsStyle="warning">
-          <strong>{t('Warning!')}</strong> {CHANGE_WARNING_MSG}
-        </Alert>
-        <div>
-          <FormControl
-            inputRef={ref => {
-              setSearchRef(ref);
-            }}
-            type="text"
-            bsSize="sm"
-            value={filter}
-            placeholder={t('Search / Filter')}
-            // @ts-ignore
-            onChange={changeSearch}
-          />
-        </div>
-        {loading && <Loading />}
-        {datasources && (
-          <Table
-            columns={TABLE_COLUMNS}
-            className="table table-condensed"
-            data={datasources}
-            itemsPerPage={20}
-            filterable={TABLE_FILTERABLE}
-            filterBy={filter}
-            hideFilterInput
-          />
+    <StyledModal
+      show={show}
+      onHide={onHide}
+      responsive
+      title={t('Select a dataset')}
+      hideFooter
+    >
+      <>
+        {!confirmChange && (
+          <>
+            <Alert bsStyle="warning">
+              <strong>{t('Warning!')}</strong> {CHANGE_WARNING_MSG}
+            </Alert>
+            <div>
+              <FormControl
+                inputRef={ref => {
+                  setSearchRef(ref);
+                }}
+                type="text"
+                bsSize="sm"
+                value={filter}
+                placeholder={t('Search / Filter')}
+                onChange={changeSearch}
+              />
+            </div>
+            {loading && <Loading />}
+            {!loading && (
+              <TableView
+                columns={TABLE_COLUMNS}
+                data={renderTableView()}
+                pageSize={20}
+                className="table-condensed"
+              />
+            )}
+          </>
         )}
-      </Modal.Body>
-    </Modal>
+        {confirmChange && (
+          <ConfirmModalStyled>
+            <div className="confirm-modal-container">
+              {CONFIRM_WARNING_MESSAGE}
+              <div className="btn-container">
+                <Button onClick={handlerCancelConfirm}>Cancel</Button>
+                <Button
+                  className="proceed-btn"
+                  buttonStyle="primary"
+                  onClick={handleChangeConfirm}
+                >
+                  Proceed
+                </Button>
+              </div>
+            </div>
+          </ConfirmModalStyled>
+        )}
+      </>
+    </StyledModal>
   );
 };
 

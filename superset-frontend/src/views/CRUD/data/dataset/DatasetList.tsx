@@ -16,8 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { SupersetClient, t } from '@superset-ui/core';
-import React, { FunctionComponent, useState, useMemo } from 'react';
+import { SupersetClient, t, styled } from '@superset-ui/core';
+import React, {
+  FunctionComponent,
+  useState,
+  useMemo,
+  useCallback,
+} from 'react';
 import rison from 'rison';
 import {
   createFetchRelated,
@@ -29,16 +34,43 @@ import ConfirmStatusChange from 'src/components/ConfirmStatusChange';
 import DatasourceModal from 'src/datasource/DatasourceModal';
 import DeleteModal from 'src/components/DeleteModal';
 import ListView, { ListViewProps, Filters } from 'src/components/ListView';
-import SubMenu, { SubMenuProps } from 'src/components/Menu/SubMenu';
+import SubMenu, {
+  SubMenuProps,
+  ButtonProps,
+} from 'src/components/Menu/SubMenu';
 import { commonMenuData } from 'src/views/CRUD/data/common';
-import AvatarIcon from 'src/components/AvatarIcon';
 import Owner from 'src/types/Owner';
 import withToasts from 'src/messageToasts/enhancers/withToasts';
 import TooltipWrapper from 'src/components/TooltipWrapper';
 import Icon from 'src/components/Icon';
+import FacePile from 'src/components/FacePile';
+import CertifiedIconWithTooltip from 'src/components/CertifiedIconWithTooltip';
+import ImportModelsModal from 'src/components/ImportModal/index';
+import { isFeatureEnabled, FeatureFlag } from 'src/featureFlags';
 import AddDatasetModal from './AddDatasetModal';
 
 const PAGE_SIZE = 25;
+const PASSWORDS_NEEDED_MESSAGE = t(
+  'The passwords for the databases below are needed in order to ' +
+    'import them together with the datasets. Please note that the ' +
+    '"Secure Extra" and "Certificate" sections of ' +
+    'the database configuration are not present in export files, and ' +
+    'should be added manually after the import if they are needed.',
+);
+const CONFIRM_OVERWRITE_MESSAGE = t(
+  'You are importing one or more datasets that already exist. ' +
+    'Overwriting might cause you to lose some of your work. Are you ' +
+    'sure you want to overwrite?',
+);
+
+const FlexRowContainer = styled.div`
+  align-items: center;
+  display: flex;
+
+  > svg {
+    margin-right: ${({ theme }) => theme.gridUnit}px;
+  }
+`;
 
 type Dataset = {
   changed_by_name: string;
@@ -60,11 +92,15 @@ type Dataset = {
 interface DatasetListProps {
   addDangerToast: (msg: string) => void;
   addSuccessToast: (msg: string) => void;
+  user: {
+    userId: string | number;
+  };
 }
 
 const DatasetList: FunctionComponent<DatasetListProps> = ({
   addDangerToast,
   addSuccessToast,
+  user,
 }) => {
   const {
     state: {
@@ -92,26 +128,46 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
     setDatasetCurrentlyEditing,
   ] = useState<Dataset | null>(null);
 
-  const canEdit = hasPerm('can_edit');
-  const canDelete = hasPerm('can_delete');
-  const canCreate = hasPerm('can_add');
+  const [importingDataset, showImportModal] = useState<boolean>(false);
+  const [passwordFields, setPasswordFields] = useState<string[]>([]);
+
+  const openDatasetImportModal = () => {
+    showImportModal(true);
+  };
+
+  const closeDatasetImportModal = () => {
+    showImportModal(false);
+  };
+
+  const handleDatasetImport = () => {
+    showImportModal(false);
+    refreshData();
+  };
+
+  const canEdit = hasPerm('can_write');
+  const canDelete = hasPerm('can_write');
+  const canCreate = hasPerm('can_write');
+  const canExport = hasPerm('can_read');
 
   const initialSort = [{ id: 'changed_on_delta_humanized', desc: true }];
 
-  const openDatasetEditModal = ({ id }: Dataset) => {
-    SupersetClient.get({
-      endpoint: `/api/v1/dataset/${id}`,
-    })
-      .then(({ json = {} }) => {
-        const owners = json.result.owners.map((owner: any) => owner.id);
-        setDatasetCurrentlyEditing({ ...json.result, owners });
+  const openDatasetEditModal = useCallback(
+    ({ id }: Dataset) => {
+      SupersetClient.get({
+        endpoint: `/api/v1/dataset/${id}`,
       })
-      .catch(() => {
-        addDangerToast(
-          t('An error occurred while fetching dataset related data'),
-        );
-      });
-  };
+        .then(({ json = {} }) => {
+          const owners = json.result.owners.map((owner: any) => owner.id);
+          setDatasetCurrentlyEditing({ ...json.result, owners });
+        })
+        .catch(() => {
+          addDangerToast(
+            t('An error occurred while fetching dataset related data'),
+          );
+        });
+    },
+    [addDangerToast],
+  );
 
   const openDatasetDeleteModal = (dataset: Dataset) =>
     SupersetClient.get({
@@ -141,7 +197,7 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
             original: { kind },
           },
         }: any) => {
-          if (kind === 'physical')
+          if (kind === 'physical') {
             return (
               <TooltipWrapper
                 label="physical-dataset"
@@ -150,6 +206,7 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
                 <Icon name="dataset-physical" />
               </TooltipWrapper>
             );
+          }
 
           return (
             <TooltipWrapper
@@ -167,9 +224,31 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
       {
         Cell: ({
           row: {
-            original: { table_name: datasetTitle },
+            original: {
+              extra,
+              table_name: datasetTitle,
+              explore_url: exploreURL,
+            },
           },
-        }: any) => datasetTitle,
+        }: any) => {
+          const titleLink = <a href={exploreURL}>{datasetTitle}</a>;
+          try {
+            const parsedExtra = JSON.parse(extra);
+            return parsedExtra?.certification ? (
+              <FlexRowContainer>
+                <CertifiedIconWithTooltip
+                  certifiedBy={parsedExtra.certification.certified_by}
+                  details={parsedExtra.certification.details}
+                />
+                {titleLink}
+              </FlexRowContainer>
+            ) : (
+              titleLink
+            );
+          } catch {
+            return titleLink;
+          }
+        },
         Header: t('Name'),
         accessor: 'table_name',
       },
@@ -222,32 +301,16 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
       {
         Cell: ({
           row: {
-            original: { owners, table_name: tableName },
+            original: { owners = [], table_name: tableName },
           },
-        }: any) => {
-          if (!owners) {
-            return null;
-          }
-          return owners
-            .slice(0, 5)
-            .map((owner: Owner) => (
-              <AvatarIcon
-                key={owner.id}
-                uniqueKey={`${tableName}-${owner.username}`}
-                firstName={owner.first_name}
-                lastName={owner.last_name}
-                iconSize={24}
-                textSize={9}
-              />
-            ));
-        },
+        }: any) => <FacePile users={owners} />,
         Header: t('Owners'),
         id: 'owners',
         disableSortBy: true,
         size: 'lg',
       },
       {
-        accessor: 'is_sqllab_view',
+        accessor: 'sql',
         hidden: true,
         disableSortBy: true,
       },
@@ -255,25 +318,12 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
         Cell: ({ row: { original } }: any) => {
           const handleEdit = () => openDatasetEditModal(original);
           const handleDelete = () => openDatasetDeleteModal(original);
-          if (!canEdit && !canDelete) {
+          const handleExport = () => handleBulkDatasetExport([original]);
+          if (!canEdit && !canDelete && !canExport) {
             return null;
           }
           return (
             <span className="actions">
-              <TooltipWrapper
-                label="explore-action"
-                tooltip={t('Explore')}
-                placement="bottom"
-              >
-                <a
-                  role="button"
-                  tabIndex={0}
-                  className="action-button"
-                  href={original.explore_url}
-                >
-                  <Icon name="compass" />
-                </a>
-              </TooltipWrapper>
               {canDelete && (
                 <TooltipWrapper
                   label="delete-action"
@@ -290,7 +340,22 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
                   </span>
                 </TooltipWrapper>
               )}
-
+              {canExport && (
+                <TooltipWrapper
+                  label="export-action"
+                  tooltip={t('Export')}
+                  placement="bottom"
+                >
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="action-button"
+                    onClick={handleExport}
+                  >
+                    <Icon name="share" />
+                  </span>
+                </TooltipWrapper>
+              )}
               {canEdit && (
                 <TooltipWrapper
                   label="edit-action"
@@ -303,7 +368,7 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
                     className="action-button"
                     onClick={handleEdit}
                   >
-                    <Icon name="pencil" />
+                    <Icon name="edit-alt" />
                   </span>
                 </TooltipWrapper>
               )}
@@ -312,10 +377,11 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
         },
         Header: t('Actions'),
         id: 'actions',
+        hidden: !canEdit && !canDelete,
         disableSortBy: true,
       },
     ],
-    [canCreate, canEdit, canDelete],
+    [canEdit, canDelete, canExport, openDatasetEditModal],
   );
 
   const filterTypes: Filters = useMemo(
@@ -335,6 +401,7 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
               errMsg,
             ),
           ),
+          user.userId,
         ),
         paginate: true,
       },
@@ -348,10 +415,7 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
           'dataset',
           'database',
           createErrorHandler(errMsg =>
-            t(
-              'An error occurred while fetching dataset datasource values: %s',
-              errMsg,
-            ),
+            t('An error occurred while fetching datasets: %s', errMsg),
           ),
         ),
         paginate: true,
@@ -373,13 +437,13 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
       },
       {
         Header: t('Type'),
-        id: 'is_sqllab_view',
+        id: 'sql',
         input: 'select',
-        operator: 'eq',
+        operator: 'dataset_is_null_or_empty',
         unfilteredLabel: 'All',
         selects: [
-          { label: 'Virtual', value: true },
-          { label: 'Physical', value: false },
+          { label: 'Virtual', value: false },
+          { label: 'Physical', value: true },
         ],
       },
       {
@@ -397,24 +461,37 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
     ...commonMenuData,
   };
 
+  const buttonArr: Array<ButtonProps> = [];
+
+  if (canDelete || canExport) {
+    buttonArr.push({
+      name: t('Bulk Select'),
+      onClick: toggleBulkSelect,
+      buttonStyle: 'secondary',
+    });
+  }
+
   if (canCreate) {
-    menuData.primaryButton = {
+    buttonArr.push({
       name: (
         <>
-          {' '}
           <i className="fa fa-plus" /> {t('Dataset')}{' '}
         </>
       ),
       onClick: () => setDatasetAddModalOpen(true),
-    };
+      buttonStyle: 'primary',
+    });
   }
 
-  if (canDelete) {
-    menuData.secondaryButton = {
-      name: t('Bulk Select'),
-      onClick: toggleBulkSelect,
-    };
+  if (isFeatureEnabled(FeatureFlag.VERSIONED_EXPORT)) {
+    buttonArr.push({
+      name: <Icon name="import" />,
+      buttonStyle: 'link',
+      onClick: openDatasetImportModal,
+    });
   }
+
+  menuData.buttons = buttonArr;
 
   const closeDatasetDeleteModal = () => {
     setDatasetCurrentlyDeleting(null);
@@ -456,6 +533,14 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
           t('There was an issue deleting the selected datasets: %s', errMsg),
         ),
       ),
+    );
+  };
+
+  const handleBulkDatasetExport = (datasetsToExport: Dataset[]) => {
+    return window.location.assign(
+      `/api/v1/dataset/export/?q=${rison.encode(
+        datasetsToExport.map(({ id }) => id),
+      )}`,
     );
   };
 
@@ -501,17 +586,23 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
         onConfirm={handleBulkDatasetDelete}
       >
         {confirmDelete => {
-          const bulkActions: ListViewProps['bulkActions'] = canDelete
-            ? [
-                {
-                  key: 'delete',
-                  name: t('Delete'),
-                  onSelect: confirmDelete,
-                  type: 'danger',
-                },
-              ]
-            : [];
-
+          const bulkActions: ListViewProps['bulkActions'] = [];
+          if (canDelete) {
+            bulkActions.push({
+              key: 'delete',
+              name: t('Delete'),
+              onSelect: confirmDelete,
+              type: 'danger',
+            });
+          }
+          if (canExport) {
+            bulkActions.push({
+              key: 'export',
+              name: t('Export'),
+              type: 'primary',
+              onSelect: handleBulkDatasetExport,
+            });
+          }
           return (
             <ListView<Dataset>
               className="dataset-list-view"
@@ -530,8 +621,9 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
                 const { virtualCount, physicalCount } = selected.reduce(
                   (acc, e) => {
                     if (e.original.kind === 'physical') acc.physicalCount += 1;
-                    else if (e.original.kind === 'virtual')
+                    else if (e.original.kind === 'virtual') {
                       acc.virtualCount += 1;
+                    }
                     return acc;
                   },
                   { virtualCount: 0, physicalCount: 0 },
@@ -566,6 +658,20 @@ const DatasetList: FunctionComponent<DatasetListProps> = ({
           );
         }}
       </ConfirmStatusChange>
+
+      <ImportModelsModal
+        resourceName="dataset"
+        resourceLabel={t('dataset')}
+        passwordsNeededMessage={PASSWORDS_NEEDED_MESSAGE}
+        confirmOverwriteMessage={CONFIRM_OVERWRITE_MESSAGE}
+        addDangerToast={addDangerToast}
+        addSuccessToast={addSuccessToast}
+        onModelImport={handleDatasetImport}
+        show={importingDataset}
+        onHide={closeDatasetImportModal}
+        passwordFields={passwordFields}
+        setPasswordFields={setPasswordFields}
+      />
     </>
   );
 };

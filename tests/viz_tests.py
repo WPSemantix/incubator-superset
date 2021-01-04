@@ -165,7 +165,18 @@ class TestBaseViz(SupersetTestCase):
 
         datasource.database.cache_timeout = None
         test_viz = viz.BaseViz(datasource, form_data={})
+        self.assertEqual(
+            app.config["DATA_CACHE_CONFIG"]["CACHE_DEFAULT_TIMEOUT"],
+            test_viz.cache_timeout,
+        )
+
+        data_cache_timeout = app.config["DATA_CACHE_CONFIG"]["CACHE_DEFAULT_TIMEOUT"]
+        app.config["DATA_CACHE_CONFIG"]["CACHE_DEFAULT_TIMEOUT"] = None
+        datasource.database.cache_timeout = None
+        test_viz = viz.BaseViz(datasource, form_data={})
         self.assertEqual(app.config["CACHE_DEFAULT_TIMEOUT"], test_viz.cache_timeout)
+        # restore DATA_CACHE_CONFIG timeout
+        app.config["DATA_CACHE_CONFIG"]["CACHE_DEFAULT_TIMEOUT"] = data_cache_timeout
 
 
 class TestTableViz(SupersetTestCase):
@@ -1384,60 +1395,3 @@ class TestPivotTableViz(SupersetTestCase):
     def test_format_datetime_from_int(self):
         assert viz.PivotTableViz._format_datetime(123) == 123
         assert viz.PivotTableViz._format_datetime(123.0) == 123.0
-
-
-class TestDistributionPieViz(SupersetTestCase):
-    base_df = pd.DataFrame(
-        data={
-            "intcol": [1, 2, 3, 4, None],
-            "floatcol": [1.0, 0.2, 0.3, 0.4, None],
-            "strcol_a": ["a", "a", "a", "a", None],
-            "strcol": ["a", "b", "c", None, "d"],
-        }
-    )
-
-    @staticmethod
-    def get_cols(data: List[Dict[str, Any]]) -> Set[str]:
-        return set([row["x"] for row in data])
-
-    def test_bool_groupby(self):
-        datasource = self.get_datasource_mock()
-        df = pd.DataFrame(data={"intcol": [1, 2, None], "boolcol": [True, None, False]})
-
-        pie_viz = viz.DistributionPieViz(
-            datasource, {"metrics": ["intcol"], "groupby": ["boolcol"]},
-        )
-        data = pie_viz.get_data(df)
-        assert self.get_cols(data) == {"True", "False", "<NULL>"}
-
-    def test_string_groupby(self):
-        datasource = self.get_datasource_mock()
-        pie_viz = viz.DistributionPieViz(
-            datasource, {"metrics": ["floatcol"], "groupby": ["strcol"]},
-        )
-        data = pie_viz.get_data(self.base_df)
-        assert self.get_cols(data) == {"<NULL>", "a", "b", "c", "d"}
-
-    def test_int_groupby(self):
-        datasource = self.get_datasource_mock()
-        pie_viz = viz.DistributionPieViz(
-            datasource, {"metrics": ["floatcol"], "groupby": ["intcol"]},
-        )
-        data = pie_viz.get_data(self.base_df)
-        assert self.get_cols(data) == {"<NULL>", "1", "2", "3", "4"}
-
-    def test_float_groupby(self):
-        datasource = self.get_datasource_mock()
-        pie_viz = viz.DistributionPieViz(
-            datasource, {"metrics": ["intcol"], "groupby": ["floatcol"]},
-        )
-        data = pie_viz.get_data(self.base_df)
-        assert self.get_cols(data) == {"<NULL>", "1", "0.2", "0.3", "0.4"}
-
-    def test_multi_groupby(self):
-        datasource = self.get_datasource_mock()
-        pie_viz = viz.DistributionPieViz(
-            datasource, {"metrics": ["floatcol"], "groupby": ["intcol", "strcol"]},
-        )
-        data = pie_viz.get_data(self.base_df)
-        assert self.get_cols(data) == {"1, a", "2, b", "3, c", "4, <NULL>", "<NULL>, d"}
